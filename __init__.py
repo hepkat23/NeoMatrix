@@ -1,0 +1,10 @@
+from calibre.customize import InterfaceActionBase
+
+class FrankenBOOXSyncPlugin(InterfaceActionBase):
+    name = 'NeoMatrix'
+    description = 'BOOX reading data archive and Calibre library integration'
+    supported_platforms = ['osx', 'windows', 'linux']
+    author = 'OpenAI + R V'
+    version = (1, 2, 6)
+    minimum_calibre_version = (7, 0, 0)
+    actual_plugin = 'calibre_plugins.frankenboox.ui:FrankenBOOXSyncAction'
