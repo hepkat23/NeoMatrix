@@ -3,6 +3,7 @@ import copy
 import html
 import re
 from datetime import datetime, timezone
+from calibre_plugins.frankenboox.sync_state import state_signature
 
 DATA_KEY = 'neomatrix_reading_state_v1'
 COLUMNS = (
@@ -75,6 +76,10 @@ def prepare(state):
                 last = last.replace(tzinfo=timezone.utc)
         except (ValueError, TypeError):
             pass
+    # Calibre persists datetime custom columns at whole-second precision.
+    # Keep device milliseconds in the state archive, but compare/write the column
+    # in the same representation that survives closing and reopening the library.
+    column_last = last.replace(microsecond=0) if last is not None else None
     anns, bookmarks = active_items(state, 'annotations'), active_items(state, 'bookmarks')
     # Retain the actual device enum instead of guessing what each enum means.
     status = (state.get('boox_book') or {}).get('reading_status')
@@ -96,7 +101,7 @@ def prepare(state):
                      (' — BOOX page ' + str(page + 1) if page is not None else '') + '</p>')
     lines.append('<p>Handwriting and original position data are available in NeoMatrix → Browse saved reading data.</p>')
     values = dict(zip((x[0] for x in COLUMNS), (
-        percent, last, status_text, sum(bool(a.get('quote')) for a in anns),
+        percent, column_last, status_text, sum(bool(a.get('quote')) for a in anns),
         sum(bool(a.get('note')) for a in anns), len(bookmarks), '\n'.join(lines))))
     payload = copy.deepcopy(state)
     payload['calibre_integration'] = {'schema': 1, 'percentage': percent,
@@ -105,17 +110,24 @@ def prepare(state):
 
 
 def integrate(db, book_id, state):
+    from calibre_plugins.frankenboox.library_push import ensure_pull_ready
+    ensure_pull_ready(db, book_id, state)
     values, payload = prepare(state)
     # Save previous values for recovery if any database write fails.
     old = {label: db.field_for('#' + label, book_id) for label in values}
+    previous = db.get_custom_book_data(DATA_KEY).get(book_id)
     written = []
     try:
         for label, value in values.items():
+            if old[label] == value:
+                continue
             db.set_field('#' + label, {book_id: value})
             written.append(label)
         # Shared, versioned representation for future consumers, including CrossPoint.
         # delete_first=False preserves other books' records.
-        db.add_custom_book_data(DATA_KEY, {book_id: payload}, delete_first=False)
+        if (not isinstance(previous, dict) or state_signature(previous) != state_signature(payload) or
+                previous.get('calibre_integration') != payload.get('calibre_integration')):
+            db.add_custom_book_data(DATA_KEY, {book_id: payload}, delete_first=False)
     except Exception as error:
         failures = []
         for label in reversed(written):

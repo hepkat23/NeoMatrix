@@ -1,102 +1,84 @@
-NeoMatrix 1.2.6 — native Calibre EPUB reader integration
+NeoMatrix 1.4.1 — BOOX reading data in Calibre
 
-INSTALL AND USE
-1. Close Calibre's ebook viewer before importing positions.
-2. Install this ZIP with Preferences > Plugins > Load plugin from file.
-3. Restart Calibre. For a connected device, use NeoMatrix > Sync BOOX. For
-   already archived data, use NeoMatrix > Tools… > Integrate saved data; no
-   BOOX reconnection is needed.
-4. Use Tools… > Reader integration report (all books) to see the result for each book.
-5. Open the EPUB from Calibre's library. Mapped highlights and typed notes are
-   native viewer annotations. Mapped bookmarks appear in the viewer's bookmarks.
-   A normal Sync (or Integrate saved data (all books)) asks once how to handle existing Calibre
-   positions: Apply BOOX positions, Keep Calibre positions, or Cancel. Apply is the
-   recommended choice when importing a test library; it overwrites mapped positions.
-   Keep leaves the current Calibre position untouched for this operation.
+INSTALL
+Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
+Restart Calibre. Install Android Platform Tools (ADB), enable USB debugging on
+BOOX, and approve the computer on the device. The first Sync may create BOOX
+columns and ask for one Calibre restart. BOOX may separately ask you to approve
+an Android backup when collecting handwriting metadata.
 
-Sync connected BOOX runs both library and reader integration automatically.
-USB debugging approval now has a responsive two-minute waiting dialog and Cancel.
-The separate Android handwriting-backup approval retains the previous workflow.
-Cancellation or a failed collection cannot reuse the preceding successful sync.
+EVERYDAY USE
+Save and close books in both readers. Connect and unlock BOOX, then click Sync.
+NeoMatrix reads the device, imports changed notes and reading data, and compares
+reading positions in both places. Up-to-date books are not rewritten.
 
-WHAT IS MAPPED
-Highlights are anchored by text that occurs uniquely within the identified EPUB
-chapter, or uniquely in the book if the chapter cannot be identified. Quotes can
-span formatting elements and differing whitespace. Offsets use UTF-16 for Calibre.
-Typed notes accompany those highlights. Repeated quotes are skipped if ambiguous.
-Bookmarks use verified chapter-start positions or uniquely located quote text.
-BOOX numerical offsets are not blindly copied into Calibre.
+When newer Calibre positions can safely be sent to BOOX, Sync shows the book
+names and asks: Sync both ways, Read BOOX only, or Cancel. No position is sent
+without that choice. Backups are saved automatically on your computer before
+any device update. Reopen and close each pushed book in NeoReader afterward;
+this loads the new location and refreshes the BOOX page percentage.
 
-Resume mapping supports chapter starts identified by EPUB manifest ID, and BOOX
-DOM paths whose indexing convention can be calibrated from matching highlights
-in that same book. Other BOOX positions are reported as unsupported. This release
-does NOT promise that every book will resume correctly; no percentage-based guess
-is substituted. Existing Calibre positions remain when conversion is unsupported.
+Newer Calibre positions are kept even if a push is declined or unsupported.
+If both readers changed since the last pull, the position is kept and the
+conflict is reported. No position is guessed from a percentage.
 
-The converter uses Calibre's own EPUB extraction and viewer container routines to
-match the viewer's spine order and parsed documents. Source EPUBs are not modified.
-PDF/CBZ/native handwriting overlay conversion is not implemented. Existing library
-columns, notes, raw annotations, and handwriting archives remain available.
+WHAT WORKS
+- BOOX to Calibre: supported EPUB highlights, typed notes, bookmarks and verified
+  resume locations become native Calibre reader data. Reading progress uses
+  Calibre's standard 0–1 fraction and the BOOX percentage column.
+- Calibre to BOOX: on Android 12 or newer, this first push release supports EPUB resume locations already
+  observed and verified in saved BOOX data, such as mapped BOOX bookmarks. An
+  arbitrary new Calibre location is skipped if no verified BOOX position exists.
+  Highlights, typed notes and handwriting are not pushed to BOOX yet.
+- Original BOOX annotations, metadata and handwriting files are archived locally.
+  Handwriting can be viewed in NeoMatrix; native editable handwriting overlays
+  and PDF/CBZ reader-location conversion are not implemented.
 
-DATA AND FUTURE DEVICE PLUGINS
-neomatrix_reading_state_v1: existing structured BOOX archive data.
-neomatrix_portable_anchors_v1: verified anchors, source EPUB SHA-256, spine href,
-  DOM text offset in Unicode codepoints, chapter text SHA-256, context, and Calibre CFI.
-  This is an interchange representation; device plugins must still translate their
-  own formats. It is not an X3 progress.bin file or a BOOX write-back implementation.
-neomatrix_reader_report_v1: mapped annotation count, resume mapping/application
-  status, and reasons for skipped items or failed native integration.
+SAFETY AND COMPATIBILITY
+Push identifies the exact BOOX copy by document ID, record ID and path. Separate
+volumes stay separate. EPUB reading resources and structure must match the
+verified Calibre archive. Calibre bookmarks, bibliographic metadata, ZIP packing
+and manifest order may differ; text, images, styles, reading order, manifest IDs
+and layout metadata must match. Encrypted packages retain all package metadata.
+The exact BOOX file checksum is checked again before update or restore;
+BOOX's metadata MD5 tag is only an identity value.
+A changed file, changed device state or ambiguous position stops the push.
+The original metadata is backed up first, the update is conditional, and device
+readback must match. A repeat push to the same location performs no write.
 
-Native annotations use deterministic UUIDs and BOOX timestamps. Calibre's merge API
-preserves unrelated annotations and prefers newer edits. Repeated import does not
-create duplicate highlights. Bookmarks have BOOX-labelled stable titles. A normal
-Keep choice preserves an existing Calibre resume position; Apply deliberately
-overwrites the mapped resume position for the current operation.
-Deleted annotation propagation and two-way conflict handling are not implemented.
-All original extraction/handwriting safeguards and read-only BOOX behavior remain.
+A pushed book cannot import an old BOOX page fraction before NeoReader refreshes
+it. Ordinary imports retain unrelated annotations and newer Calibre positions.
+No ebook file is modified. Only the exported Android metadata provider is used;
+no rooting, firmware modification or proprietary source code is required.
+
+MORE
+Saved reading data: browse local reading and handwriting archives.
+Free up BOOX storage: optional review of verified orphaned reader files. Scan
+makes no changes. Removal requires a separate choice and a verified backup.
+Books still present on internal memory/SD cards, Kindle CR! downloads, tiny caches,
+shared databases and uncertain data are protected. Cleanup does not run in Sync.
+Restore a reading-position backup: restores the old position only on the same
+BOOX and exact book, provided there has been no newer reading since the push.
+Advanced: manual imports, position overrides, reports and local diagnosis export.
+Diagnosis exports contain private book/reading data; nothing is uploaded by the
+plugin. The release ZIP excludes device snapshots, books, backups and diagnostics.
 
 VALIDATION
-27 automated checks passed (3 GUI checks skipped because PyQt6 is unavailable in the
-build environment): existing saved-archive integration, conflict checks,
-column rollback, escaping, Unicode/UTF-16 offsets, multi-element highlights,
-whitespace, ambiguity rejection, calibrated versus unsupported positions,
-stable IDs/repeat imports, raw source preservation, and upstream Calibre merge
-behavior preserving newer positions and unrelated notes. Python compilation and
-ZIP integrity checks passed.
+Version 1.4.1 was checked against actual Calibre and BOOX copies of two EPUBs
+whose only differences were metadata and Calibre bookmarks. Reading resources,
+chapter identities and converted anchors matched. A third EPUB with a changed
+image remained blocked. Fourteen regression tests cover these comparisons,
+incremental archive checks and checksum guards for push, backup and restore.
 
-The desktop Calibre GUI, USB approval dialog and actual device reading positions
-depend on the local Calibre and BOOX environment. Mapping tests use synthetic
-chapter fixtures; consult the per-book report for book-specific results and retain
-the original archives.
+The first device push was checked on an original synthetic two-chapter EPUB on
+BOOX Go Color 7 Gen II / Android 13. NeoReader reopened at the pushed first chapter
+and changed its progress from 11/20 to 1/20. Repeat push was unchanged; other books,
+bookmarks, annotations and EPUB bytes were unchanged. Firmware/format support
+varies, so unsupported positions are reported and retained.
 
-1.2.2: Device collection and reader integration run on background threads.
-The main window shows collection stages; backup approval remains on BOOX.
-Removed countdown and intermediate success/backup confirmation popups.
-A failed backup is validated against preserved handwriting before archiving.
+Developer regression tests cover incremental writes, separate volumes, duplicate
+copies, missing paths, cleanup protection, position mapping, content checks,
+backups, conditional updates, restore guards, and the main Sync choices.
 
-1.2.2: Reject scalar JSON in location fields; add explicit Use BOOX reading position
-action for books selected in the main Calibre library. Preserves displaced viewer
-position as a bookmark. Close the viewer before applying and reopen afterwards.
-Unmapped positions remain unchanged. Export selected book for diagnosis creates
-a local ZIP with the complete EPUB and saved BOOX state; it uploads nothing.
-
-1.2.3: Persist a verified resume position to Calibre's per-book viewer sidecar,
-which is what the desktop ebook viewer actually reads on startup. The EPUB is
-never modified. The library's last-read position index is updated as a secondary
-record; existing viewer annotations remain intact. A newer local viewer position
-is preserved by the Keep choice unless an Apply choice (or the explicit Tools
-action) is made.
-
-1.2.4: Simplified the main window to two primary controls: Sync BOOX and Tools…
-Browse, integrate, apply position, report, and diagnosis export remain available
-from the Tools menu.
-
-1.2.5: Sync and Integrate saved data ask once per operation whether to apply BOOX
-reading positions, keep existing Calibre positions, or cancel. Apply is the default
-recommendation for initial imports and test libraries; explicit position application
-still preserves the displaced Calibre position as a bookmark where supported.
-
-1.2.6: When a BOOX DOM path cannot be resolved directly, use an exactly matching
-unique bookmark quote as a verified resume anchor. This supports NeoReader EPUBs
-whose position paths do not match Calibre's DOM indexing without guessing from
-percentage progress.
+NeoMatrix is an independent compatibility tool. No BOOX firmware, third-party
+books or device-private diagnostics are distributed with it.

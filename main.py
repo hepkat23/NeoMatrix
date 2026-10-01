@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import struct
 import subprocess
@@ -11,6 +12,7 @@ import tempfile
 import time
 import zlib
 import zipfile
+from pathlib import Path
 from datetime import datetime, timezone
 
 from qt.core import (
@@ -20,6 +22,11 @@ from qt.core import (
 )
 from calibre.utils.config import JSONConfig
 from calibre_plugins.frankenboox.integration import ensure_columns, integrate_with_reader as integrate, RestartRequired
+from calibre_plugins.frankenboox.sync_state import state_signature, combine_book_entries, volume_identity
+
+from calibre_plugins.frankenboox.boox_files import retain_existing_books
+
+SYNC_KEY = 'neomatrix_sync_status_v1'
 from calibre_plugins.frankenboox.approval import ApprovalDialog
 from calibre_plugins.frankenboox.background import run_background
 
@@ -305,6 +312,9 @@ def point_file_summary(data):
 
 
 def find_adb():
+    on_path = shutil.which('adb')
+    if on_path:
+        return on_path
     candidates = [
         os.path.expanduser('~/.boox-diagnostic-platform-tools/platform-tools/adb'),
         '/opt/homebrew/bin/adb', '/usr/local/bin/adb', '/usr/bin/adb'
@@ -475,33 +485,40 @@ class FrankenDialog(QDialog):
         self.supplemental_sources = []
         self.collection_source = None
 
-        self.setWindowTitle('NeoMatrix — v1.2.6')
+        self.setWindowTitle('NeoMatrix — v1.4.1')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.2.6</b><br>'
-            'Connect the BOOX by USB with USB Debug Mode enabled. NeoMatrix reads NeoReader state directly, then archives it into Calibre. '
-            '<b>NeoMatrix never writes to the BOOX.</b><br>'
-            'For normal use, press <b>Sync BOOX</b>. Additional actions are under <b>Tools…</b>.'
+            '<b>NeoMatrix v1.4.1</b><br>'
+            'Save and close your books, connect BOOX by USB, then press <b>Sync</b>. '
+            'NeoMatrix saves changed reading data in Calibre and <b>asks before sending newer positions to BOOX.</b> '
+            'Unsupported positions stay unchanged.'
         )
         note.setWordWrap(True)
         lay.addWidget(note)
 
         buttons = QHBoxLayout()
-        self.collect_btn = QPushButton('Sync BOOX')
+        self.collect_btn = QPushButton('Sync')
+        self.collect_btn.setMinimumHeight(36)
+        self.collect_btn.setDefault(True)
         self.archive_btn = QPushButton('Archive again')
         self.archive_btn.setEnabled(False)
         self.collect_btn.clicked.connect(self.sync_direct)
         self.archive_btn.clicked.connect(self.archive)
         buttons.addWidget(self.collect_btn)
-        self.tools_btn = QPushButton('Tools…')
+        self.tools_btn = QPushButton('More…')
+        self.tools_btn.setMaximumWidth(140)
         self.tools_menu = QMenu(self)
-        self.tools_menu.addAction('Browse saved reading data (all books)', self.browse_archive)
-        self.tools_menu.addAction('Integrate saved data (all books)', self.integrate_saved)
+        self.tools_menu.addAction('Saved reading data', self.browse_archive)
+        self.tools_menu.addAction('Free up BOOX storage…', self.storage_cleanup)
+        self.tools_menu.addAction('Restore a reading-position backup…', self.restore_reading_position)
         self.tools_menu.addSeparator()
-        self.tools_menu.addAction('Use BOOX reading position (selected books)', self.use_boox_position)
-        self.tools_menu.addAction('Reader integration report (all books)', self.reader_report)
-        self.tools_menu.addAction('Export selected book for diagnosis', self.export_reader_diagnosis)
+        advanced = self.tools_menu.addMenu('Advanced')
+        advanced.addAction('Integrate saved data (all books)', self.integrate_saved)
+        advanced.addAction('Use BOOX reading position (selected books)', self.use_boox_position)
+        advanced.addAction('Preview reading positions (selected books)', self.push_calibre_position)
+        advanced.addAction('Reader integration report (all books)', self.reader_report)
+        advanced.addAction('Export selected book for diagnosis', self.export_reader_diagnosis)
         self.tools_btn.setMenu(self.tools_menu)
         buttons.addWidget(self.tools_btn)
         lay.addLayout(buttons)
@@ -515,12 +532,12 @@ class FrankenDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         hdr = self.table.horizontalHeader()
         hdr.setStretchLastSection(False)
-        widths = [260, 150, 105, 65, 80, 145, 300, 145]
+        widths = [240, 130, 80, 60, 75, 105, 250, 120]
         for col, width in enumerate(widths):
             self.table.setColumnWidth(col, width)
         lay.addWidget(self.table)
 
-        self.summary = QLabel('Nothing analyzed yet.')
+        self.summary = QLabel('Connect BOOX, then press Sync.')
         self.summary.setWordWrap(True)
         lay.addWidget(self.summary)
         close_btn = QPushButton('Close'); close_btn.clicked.connect(self.accept); lay.addWidget(close_btn)
@@ -539,15 +556,25 @@ class FrankenDialog(QDialog):
         else:
             super().closeEvent(event)
 
+    def storage_cleanup(self):
+        adb = find_adb()
+        if not adb:
+            QMessageBox.warning(self, 'BOOX storage cleanup',
+                                'Android Platform Tools (ADB) was not found. Install it and add adb to your system path.')
+            return
+        from calibre_plugins.frankenboox.cleanup_ui import CleanupDialog
+        CleanupDialog(self, adb).exec()
+
     def sync_direct(self):
         """Normal-user workflow: collect safely, then archive automatically.
 
-        BOOX-facing collection remains the same proven read-only path.
+        Collection reads BOOX; position pushes require the separate send choice.
         """
         if not self.integration_ready():
             return
         self.collection_source = None
         self.collection_warning = None
+        self.integration_errors = 0
         self.archive_btn.setEnabled(False)
         self.collect_direct()
         if self.collection_source != 'direct-adb' or not self.archive_btn.isEnabled():
@@ -599,26 +626,54 @@ class FrankenDialog(QDialog):
             )
             return
 
-        candidate_count = self._resume_candidate_count()
-        position_policy = self._choose_resume_policy(candidate_count)
-        if position_policy is None:
-            self.summary.setText('<b>Sync cancelled.</b> Nothing was written to Calibre. BOOX was read only.')
+        try:
+            pending, unchanged = self._pending_archive_entries()
+        except ValueError as error:
+            QMessageBox.warning(self, 'NeoMatrix — Sync needs attention', str(error))
+            self.summary.setText('<b>Sync stopped.</b> ' + str(error) + ' Nothing was written to Calibre.')
             return
-
+        from calibre_plugins.frankenboox.sync_flow import prepare_sync, execute_pushes, default_backup_directory
+        entries = combine_book_entries([self._archive_payload(m) for m in self.matches.values() if m.get('book_id') is not None])
+        try:
+            review = run_background(self, 'Comparing reading positions in Calibre and BOOX…',
+                                    lambda status: prepare_sync(self, entries, status))
+        except Exception as error:
+            self.summary.setText('<b>Sync stopped.</b> Could not compare reading positions: ' + _html(str(error)))
+            return
+        send = False
+        if review['plans']:
+            from calibre_plugins.frankenboox.push_ui import confirm_sync_pushes
+            send = confirm_sync_pushes(self, review['plans'], review['issues'])
+            if send is None:
+                self.summary.setText('<b>Sync cancelled.</b> Nothing was changed in Calibre or BOOX.')
+                return
+        if not pending and not send:
+            self.summary.setText(
+                f'<b>Sync finished.</b> <b>{unchanged}</b> books already up to date; nothing rewritten.' +
+                ('<br>' + '<br>'.join(_html(issue) for issue in review['issues']) if review['issues'] else '') +
+                ('<br>Newer Calibre positions were kept; nothing sent to BOOX.' if review['plans'] else ''))
+            return
         done = self.archive(
             skip_confirm=True,
-            force_boox_position=position_policy == 'apply',
-            keep_boox_position=position_policy == 'keep',
-        )
+            force_boox_position=False,
+            keep_boox_position=False,
+            prepared=pending,
+            position_choices=review['keep'],
+        ) if pending else 0
         if done is not None:
-            position_message = (
-                'BOOX reading positions were applied to Calibre.'
-                if position_policy == 'apply' else
-                'Existing Calibre reading positions were kept.'
-            )
+            outcomes = []
+            if send and not getattr(self, 'integration_errors', 0):
+                outcomes = run_background(self, 'Sending confirmed reading positions to BOOX…',
+                    lambda status: execute_pushes(self.db, review['device'], review['plans'], default_backup_directory(), status))
+            pushed = sum(x['status'] == 'written' for x in outcomes)
+            failures = [x['title'] + ': ' + x['reason'] for x in outcomes if x['status'] == 'failed']
+            if send and getattr(self, 'integration_errors', 0):
+                failures.append('Calibre updates had errors; no positions were sent to BOOX.')
             self.summary.setText(
-                f'<b>Sync finished.</b> Integrated <b>{done} library record(s)</b>; errors: {getattr(self, "integration_errors", 0)}. See Reader integration report for location results. '
-                + position_message + ' BOOX was read only.'
+                f'<b>Sync finished.</b> Updated <b>{done} book(s)</b> in Calibre; <b>{unchanged}</b> already up to date; '
+                f'<b>{pushed}</b> position(s) sent to BOOX.' +
+                ('<br>Reopen and close the pushed books on BOOX before the next Sync. Backups: ' + _html(str(default_backup_directory())) if pushed else '') +
+                ('<br>' + '<br>'.join(_html(x) for x in review['issues'] + failures) if review['issues'] or failures else '')
             )
             if getattr(self, 'collection_warning', None):
                 self.summary.setText(self.summary.text() +
@@ -646,6 +701,9 @@ class FrankenDialog(QDialog):
                     rows.append(rows_from_text(adb_text(adb, 'shell', 'content', 'query', '--uri', uri, timeout=90)))
                 if not rows[0]:
                     raise RuntimeError('NeoReader Metadata returned no rows.')
+                status('Checking current BOOX book files…')
+                rows[0], _ = retain_existing_books(
+                    rows[0], lambda command: adb_text(adb, 'shell', command, timeout=90))
                 status('Reading handwriting files…')
                 points = pull_point_files(adb, [boox_doc_id(r) for r in rows[0] if boox_doc_id(r)])
                 status('Reading handwriting metadata. If BOOX asks, approve the backup with the password blank.')
@@ -777,7 +835,8 @@ class FrankenDialog(QDialog):
             fmts = self.db.formats(book_id) or ()
             recs.append({'id': int(book_id), 'title': title, 'authors': list(authors),
                          'formats': tuple(str(x).lower() for x in fmts),
-                         'ntitle': norm(title), 'nauth': norm(' & '.join(authors))})
+                         'ntitle': norm(title), 'nauth': norm(' & '.join(authors)),
+                         'volumes': volume_identity(title, *[os.path.basename(self.db.format_abspath(book_id, str(fmt).upper()) or '') for fmt in fmts])})
         return recs
 
     def _md5_for_format(self, book_id, fmt):
@@ -799,17 +858,25 @@ class FrankenDialog(QDialog):
         nt = norm(br.get('title') or os.path.splitext(br.get('name') or '')[0])
         na = norm(br.get('authors') or '')
         fmt = (br.get('type') or '').lower()
+        source_volumes = volume_identity(br.get('title'), br.get('name'), br.get('location'))
         scored = []
         for cr in recs:
             if fmt and cr['formats'] and fmt not in cr['formats']: continue
+            target_volumes = cr.get('volumes') or volume_identity(cr.get('title'))
+            if source_volumes and target_volumes and source_volumes != target_volumes:
+                continue
             score = 0
             if nt and nt == cr['ntitle']: score += 70
             elif nt and cr['ntitle'] and (nt in cr['ntitle'] or cr['ntitle'] in nt): score += 40
             if na and cr['nauth']:
                 if na == cr['nauth']: score += 25
                 elif na in cr['nauth'] or cr['nauth'] in na: score += 15
+            if source_volumes and not target_volumes:
+                score = min(score, 89)
             if score: scored.append((score, cr))
         scored.sort(key=lambda x: (-x[0], x[1]['id']))
+        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+            return min(scored[0][0], 89), scored[0][1]
         return scored[0] if scored else (0, None)
 
     def _manual_pick(self, br, recs, suggested=None):
@@ -857,21 +924,29 @@ class FrankenDialog(QDialog):
             if remembered is not None:
                 try:
                     rid=int(remembered)
-                    if rid in by_id: match={'book_id':rid,'method':'remembered manual match','confidence':100}
+                    source_volumes = volume_identity(br.get('title'), br.get('name'), br.get('location'))
+                    target_volumes = by_id.get(rid, {}).get('volumes')
+                    if rid in by_id and not (source_volumes and target_volumes and source_volumes != target_volumes):
+                        match={'book_id':rid,'method':'remembered manual match','confidence':100}
                 except Exception: pass
             if match['book_id'] is None:
                 target_md5=boox_md5(br); fmt=(br.get('type') or '').lower()
                 if target_md5 and fmt:
                     try: bsize=int(br.get('size') or 0)
                     except Exception: bsize=0
+                    exact = []
+                    source_volumes = volume_identity(br.get('title'), br.get('name'), br.get('location'))
                     for cr in recs:
                         if fmt not in cr['formats']: continue
+                        if source_volumes and cr.get('volumes') and source_volumes != cr['volumes']: continue
                         try:
                             md=self.db.format_metadata(cr['id'],fmt.upper(),allow_cache=True); csize=int((md or {}).get('size') or 0)
                         except Exception: csize=0
                         if bsize and csize and bsize != csize: continue
                         if self._md5_for_format(cr['id'],fmt)==target_md5:
-                            match={'book_id':cr['id'],'method':'exact file MD5','confidence':100}; break
+                            exact.append(cr['id'])
+                    if len(exact) == 1:
+                        match={'book_id':exact[0],'method':'exact file MD5','confidence':100}
             if match['book_id'] is None:
                 score,cr=self._best_fallback(br,recs)
                 if cr is not None and score>=90: match={'book_id':cr['id'],'method':'exact title + author','confidence':score}
@@ -907,13 +982,24 @@ class FrankenDialog(QDialog):
             except Exception:
                 continue
             rels = {getattr(x, 'relpath', ''): getattr(x, 'file_path', None) for x in extras}
+            state, _ = self._archived_state_for_book(book_id)
+            source_states = (state or {}).get('source_states')
+            if source_states:
+                # Each BOOX document needs its own unchanged handwriting set.
+                # Another copy's strokes must never satisfy this fallback.
+                doc_id = (boox_doc_id(br) or '').lower()
+                source = next((item for item in source_states
+                               if str((item.get('boox_identity') or {}).get('document_id') or '').lower() == doc_id), None)
+                if source is None:
+                    continue
+                rels = {original: rels.get(preserved) for original, preserved in source.get('archive_files', {}).items()}
             archived = {}
             for rel, path in rels.items():
                 rp = rel.replace('\\', '/')
                 if not (rp.startswith('data/neomatrix/handwriting/') and path):
                     continue
                 base = os.path.basename(rp)
-                base = re.sub(r'^\\d{3}_', '', base)
+                base = re.sub(r'^\d{3}_', '', base)
                 try:
                     with open(path, 'rb') as f:
                         archived[base] = hashlib.sha256(f.read()).hexdigest()
@@ -1068,6 +1154,26 @@ class FrankenDialog(QDialog):
                 continue
         return None, None
 
+    def push_calibre_position(self):
+        ids = list(self.gui.library_view.get_selected_ids())
+        if not ids:
+            self.summary.setText('Select books in the main Calibre library, then reopen NeoMatrix.')
+            return
+        adb = find_adb()
+        if not adb:
+            self.summary.setText('Android Platform Tools (ADB) was not found.')
+            return
+        from calibre_plugins.frankenboox.push_ui import PositionPushDialog
+        PositionPushDialog(self, adb, ids).exec()
+
+    def restore_reading_position(self):
+        adb = find_adb()
+        if not adb:
+            self.summary.setText('Android Platform Tools (ADB) was not found.')
+            return
+        from calibre_plugins.frankenboox.push_ui import restore_position_backup
+        restore_position_backup(self, adb)
+
     def use_boox_position(self):
         from calibre_plugins.frankenboox.reader_bridge import integrate_reader
         ids = list(self.gui.library_view.get_selected_ids())
@@ -1188,7 +1294,164 @@ class FrankenDialog(QDialog):
         dlg = ArchiveBrowserDialog(self, self.db)
         dlg.exec()
 
-    def archive(self, skip_confirm=False, force_boox_position=False, keep_boox_position=False):
+    def _archive_payload(self, m):
+        source_name = os.path.basename(self.source_zip or '')
+        br=m['boox']; book_id=int(m['book_id']); cur,total=parse_progress(br.get('progress'))
+        extra=tolerant_json(br.get('extraAttributes')); backend=extra.get('backend') if isinstance(extra,dict) else {}
+        if not isinstance(backend,dict): backend={}
+        raw_anns=self._annotations_for(br); active_anns=[a for a in raw_anns if a.get('status') in (None,'0',0)]
+        raw_bms=self._bookmarks_for(br); active_bms=[b for b in raw_bms if b.get('status') in (None,'0',0)]
+        rn=self._readernote_for(br); pts=self._points_for(br)
+        rn_parsed=rn['parsed'] if rn else None
+        state={
+            'schema':'neomatrix-neoreader-state-v0.7.1-beta',
+            'imported_at_utc':datetime.now(timezone.utc).isoformat(),
+            'sources':{'diagnostic':source_name,'supplemental':list(self.supplemental_sources)},
+            'safety':{'boox_writes_performed':False,'ebook_files_modified':False,'bibliographic_metadata_modified':False,'calibre_native_annotations_modified':False},
+            'match':{'method':m.get('method'),'confidence':m.get('confidence'),'calibre_book_id':book_id},
+            'boox_identity':{'document_id':boox_doc_id(br),'file_md5':boox_md5(br),'metadata_uuid':br.get('uuid'),'path':br.get('location')},
+            'boox_book':{'name':br.get('name'),'title':br.get('title'),'authors':br.get('authors'),'publisher':br.get('publisher'),'language':br.get('language'),'isbn':br.get('ISBN'),'format':br.get('type'),'size':_int_or_none(br.get('size')),'favorite':_int_or_none(br.get('favorite')),'reading_status':_int_or_none(br.get('readingStatus'))},
+            'progress':{
+                'raw':br.get('progress'),'current_page':cur,'total_pages':total,
+                'last_access_ms':_int_or_none(br.get('lastAccess')),'last_access_utc':iso_from_ms(br.get('lastAccess')),
+                'backend_current_page_raw':backend.get('current_page'),
+                'backend_current_page':tolerant_json(backend.get('current_page')),
+                'current_page_position_v2_raw':backend.get('current_page_position_v2'),
+                'current_page_position_v2':tolerant_json(backend.get('current_page_position_v2')),
+                'current_page_position_v3_raw':backend.get('current_page_position_v3'),
+                'current_page_position_v3':tolerant_json(backend.get('current_page_position_v3')),
+                'layout_type':backend.get('layout_type'),'total_page_from_backend':backend.get('total_page')},
+            'annotations':{'active_count':len(active_anns),'all_rows_count':len(raw_anns),'active':[normalized_annotation(a) for a in active_anns],'raw_rows':raw_anns},
+            'bookmarks':{'active_count':len(active_bms),'all_rows_count':len(raw_bms),'active':[normalized_bookmark(b) for b in active_bms],'raw_rows':raw_bms},
+            'reader_note':rn_parsed,
+            'handwriting_point_files':[{'name':p['name'],'source_path':p['source_path'],'summary':p['summary']} for p in pts],
+            'reading_statistics':self._stats_for(br),
+            'raw_metadata_row':br,
+        }
+        files={'data/neomatrix/boox-neoreader-state.json':io.BytesIO(json.dumps(state,ensure_ascii=False,indent=2).encode('utf-8'))}
+        # Compatibility path: replace old v0.3 companion with the richer v0.4 state too.
+        files['data/boox-neoreader-state.json']=io.BytesIO(json.dumps(state,ensure_ascii=False,indent=2).encode('utf-8'))
+        if rn:
+            files['data/neomatrix/readernote/'+rn['name']]=io.BytesIO(rn['bytes'])
+        try:
+            old_names = [x.relpath for x in self.db.list_extra_files(book_id, use_cache=False)]
+        except Exception:
+            old_names = []
+        for idx,p in enumerate(sorted(pts, key=lambda p: (p['name'], p['source_path']))):
+            clean=re.sub(r'[^A-Za-z0-9._#-]+','_',p['name'])
+            rel = f'data/neomatrix/handwriting/{idx:03d}_{clean}'
+            previous = [name for name in old_names if name.startswith('data/neomatrix/handwriting/')
+                        and re.sub(r'^\d{3}_', '', name.rsplit('/', 1)[-1]) == clean]
+            if len(previous) == 1:
+                rel = previous[0]
+            files[rel] = io.BytesIO(p['bytes'])
+        return book_id, state, files
+
+    @staticmethod
+    def _reader_sync_complete(report):
+        if (not isinstance(report, dict) or not {'mapped', 'resume', 'skipped'}.issubset(report)
+                or not isinstance(report.get('skipped'), list)):
+            return False
+        failures = (
+            'Reader integration failed:',
+            'Calibre viewer resume sidecar could not be updated:',
+            'Viewer resume sidecar was updated, but Calibre position index was not:',
+        )
+        return not any(str(item).startswith(failures) for item in report.get('skipped', []))
+
+    def _archive_is_current(self, book_id, state, files, saved, report, anchors, sync_status):
+        """Skip only a complete archive/integration of the same source data."""
+        from calibre_plugins.frankenboox.integration import prepare
+        try:
+            signature = state_signature(state)
+            if sync_status is not None and (
+                    not isinstance(sync_status, dict) or not sync_status.get('complete') or
+                    sync_status.get('signature') != signature):
+                return False
+            archived, _ = self._archived_state_for_book(book_id)
+            if state_signature(archived) != signature or state_signature(saved) != signature:
+                return False
+            if not self._reader_sync_complete(report):
+                return False
+            # Validate values from the actual saved snapshot, so provider row reordering
+            # does not reorder otherwise identical reading notes.
+            values, _ = prepare(saved)
+            if any(self.db.field_for('#' + key, book_id) != value for key, value in values.items()):
+                return False
+            extras = {x.relpath: x.file_path for x in self.db.list_extra_files(book_id, use_cache=False)}
+            for rel, stream in files.items():
+                path = extras.get(rel)
+                if not path:
+                    return False
+                content = Path(path).read_bytes()
+                if rel in ('data/neomatrix/boox-neoreader-state.json', 'data/boox-neoreader-state.json'):
+                    if state_signature(json.loads(content)) != signature:
+                        return False
+                elif content != stream.getvalue():
+                    return False
+            epub = self.db.format_abspath(book_id, 'EPUB')
+            if epub:
+                if not isinstance(anchors, dict):
+                    return False
+                from calibre_plugins.frankenboox.epub_identity import reading_digest, IDENTITY_SCHEMA
+                if anchors.get('epub_reading_sha256'):
+                    if (anchors.get('epub_identity_schema') != IDENTITY_SCHEMA or
+                            anchors['epub_reading_sha256'] != reading_digest(epub)):
+                        return False
+                else:
+                    digest = hashlib.sha256()
+                    with open(epub, 'rb') as f:
+                        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                            digest.update(chunk)
+                    if anchors.get('epub_sha256') != digest.hexdigest():
+                        return False
+            elif 'Native reader integration currently supports EPUB only' not in report.get('skipped', []):
+                return False
+            return True
+        except Exception:
+            # Missing, corrupt or incomplete saved data is eligible for repair.
+            return False
+
+    def _pending_archive_entries(self):
+        from calibre_plugins.frankenboox.integration import DATA_KEY
+        from calibre_plugins.frankenboox.reader_bridge import ANCHOR_KEY, REPORT_KEY
+        entries = combine_book_entries([self._archive_payload(m) for m in self.matches.values() if m.get('book_id') is not None])
+        from calibre_plugins.frankenboox.library_push import ensure_pull_ready
+        for book_id, state, files in entries:
+            ensure_pull_ready(self.db, book_id, state)
+        try:
+            saved = self.db.get_custom_book_data(DATA_KEY)
+            reports = self.db.get_custom_book_data(REPORT_KEY)
+            anchors = self.db.get_custom_book_data(ANCHOR_KEY)
+            statuses = self.db.get_custom_book_data(SYNC_KEY)
+        except Exception:
+            return entries, 0
+        pending = [entry for entry in entries if not self._archive_is_current(
+            *entry, saved.get(entry[0]), reports.get(entry[0]), anchors.get(entry[0]), statuses.get(entry[0]))]
+        return pending, len(entries) - len(pending)
+
+    def _archive_files_to_write(self, book_id, files):
+        """Preserve the bytes and modification times of unchanged companion files."""
+        try:
+            extras = {x.relpath: x.file_path for x in self.db.list_extra_files(book_id, use_cache=False)}
+        except Exception:
+            return files
+        changed = {}
+        for rel, stream in files.items():
+            try:
+                current = Path(extras[rel]).read_bytes()
+                incoming = stream.getvalue()
+                same = current == incoming
+                if rel in ('data/neomatrix/boox-neoreader-state.json', 'data/boox-neoreader-state.json'):
+                    same = state_signature(json.loads(current)) == state_signature(json.loads(incoming))
+                if same:
+                    continue
+            except Exception:
+                pass
+            changed[rel] = stream
+        return changed
+
+    def archive(self, skip_confirm=False, force_boox_position=False, keep_boox_position=False, prepared=None, position_choices=None):
         matched=[m for m in self.matches.values() if m.get('book_id') is not None]
         if not matched:
             QMessageBox.information(self,'NeoMatrix','There are no matched books to archive.'); return 0
@@ -1200,55 +1463,29 @@ class FrankenDialog(QDialog):
                 f'Proceed for {len(matched)} books?')
             if ans!=QMessageBox.StandardButton.Yes: return None
         if not self.integration_ready(): return None
-        done=0; errors=[]; source_name=os.path.basename(self.source_zip or '')
-        for m in matched:
-            br=m['boox']; book_id=int(m['book_id']); cur,total=parse_progress(br.get('progress'))
-            extra=tolerant_json(br.get('extraAttributes')); backend=extra.get('backend') if isinstance(extra,dict) else {}
-            if not isinstance(backend,dict): backend={}
-            raw_anns=self._annotations_for(br); active_anns=[a for a in raw_anns if a.get('status') in (None,'0',0)]
-            raw_bms=self._bookmarks_for(br); active_bms=[b for b in raw_bms if b.get('status') in (None,'0',0)]
-            rn=self._readernote_for(br); pts=self._points_for(br)
-            rn_parsed=rn['parsed'] if rn else None
-            state={
-                'schema':'neomatrix-neoreader-state-v0.7.1-beta',
-                'imported_at_utc':datetime.now(timezone.utc).isoformat(),
-                'sources':{'diagnostic':source_name,'supplemental':list(self.supplemental_sources)},
-                'safety':{'boox_writes_performed':False,'ebook_files_modified':False,'bibliographic_metadata_modified':False,'calibre_native_annotations_modified':False},
-                'match':{'method':m.get('method'),'confidence':m.get('confidence'),'calibre_book_id':book_id},
-                'boox_identity':{'document_id':boox_doc_id(br),'file_md5':boox_md5(br),'metadata_uuid':br.get('uuid'),'path':br.get('location')},
-                'boox_book':{'name':br.get('name'),'title':br.get('title'),'authors':br.get('authors'),'publisher':br.get('publisher'),'language':br.get('language'),'isbn':br.get('ISBN'),'format':br.get('type'),'size':_int_or_none(br.get('size')),'favorite':_int_or_none(br.get('favorite')),'reading_status':_int_or_none(br.get('readingStatus'))},
-                'progress':{
-                    'raw':br.get('progress'),'current_page':cur,'total_pages':total,
-                    'last_access_ms':_int_or_none(br.get('lastAccess')),'last_access_utc':iso_from_ms(br.get('lastAccess')),
-                    'backend_current_page_raw':backend.get('current_page'),
-                    'backend_current_page':tolerant_json(backend.get('current_page')),
-                    'current_page_position_v2_raw':backend.get('current_page_position_v2'),
-                    'current_page_position_v2':tolerant_json(backend.get('current_page_position_v2')),
-                    'current_page_position_v3_raw':backend.get('current_page_position_v3'),
-                    'current_page_position_v3':tolerant_json(backend.get('current_page_position_v3')),
-                    'layout_type':backend.get('layout_type'),'total_page_from_backend':backend.get('total_page')},
-                'annotations':{'active_count':len(active_anns),'all_rows_count':len(raw_anns),'active':[normalized_annotation(a) for a in active_anns],'raw_rows':raw_anns},
-                'bookmarks':{'active_count':len(active_bms),'all_rows_count':len(raw_bms),'active':[normalized_bookmark(b) for b in active_bms],'raw_rows':raw_bms},
-                'reader_note':rn_parsed,
-                'handwriting_point_files':[{'name':p['name'],'source_path':p['source_path'],'summary':p['summary']} for p in pts],
-                'reading_statistics':self._stats_for(br),
-                'raw_metadata_row':br,
-            }
-            files={'data/neomatrix/boox-neoreader-state.json':io.BytesIO(json.dumps(state,ensure_ascii=False,indent=2).encode('utf-8'))}
-            # Compatibility path: replace old v0.3 companion with the richer v0.4 state too.
-            files['data/boox-neoreader-state.json']=io.BytesIO(json.dumps(state,ensure_ascii=False,indent=2).encode('utf-8'))
-            if rn:
-                files['data/neomatrix/readernote/'+rn['name']]=io.BytesIO(rn['bytes'])
-            for idx,p in enumerate(pts):
-                clean=re.sub(r'[^A-Za-z0-9._#-]+','_',p['name'])
-                files[f'data/neomatrix/handwriting/{idx:03d}_{clean}']=io.BytesIO(p['bytes'])
+        done=0; errors=[]
+        try:
+            entries = prepared if prepared is not None else combine_book_entries([self._archive_payload(m) for m in matched])
+        except ValueError as error:
+            QMessageBox.warning(self, 'NeoMatrix — check book matches', str(error))
+            return 0
+        for entry in entries:
+            book_id, state, files = entry
             try:
                 def save_book(status):
-                    self.db.add_extra_files(book_id, files, replace=True, auto_rename=False)
-                    return integrate(
+                    # A failed write must remain retryable even when an older report survives.
+                    signature = state_signature(state)
+                    self.db.add_custom_book_data(SYNC_KEY, {book_id: {'complete': False, 'signature': signature}}, delete_first=False)
+                    changed_files = self._archive_files_to_write(book_id, files)
+                    if changed_files:
+                        self.db.add_extra_files(book_id, changed_files, replace=True, auto_rename=False)
+                    report = integrate(
                         self.db, book_id, state,
                         use_boox_position=force_boox_position,
-                        keep_boox_position=keep_boox_position)
+                        keep_boox_position=keep_boox_position or bool((position_choices or {}).get(book_id)))
+                    if self._reader_sync_complete(report):
+                        self.db.add_custom_book_data(SYNC_KEY, {book_id: {'complete': True, 'signature': signature}}, delete_first=False)
+                    return report
                 run_background(self, f'Updating Calibre book #{book_id}…', save_book)
                 done+=1
             except Exception as e:

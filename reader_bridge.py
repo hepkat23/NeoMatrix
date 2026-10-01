@@ -1,6 +1,7 @@
 """BOOX to Calibre viewer conversion. No ebook or device writes."""
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -10,6 +11,43 @@ from datetime import datetime, timezone, timedelta
 ANCHOR_KEY = 'neomatrix_portable_anchors_v1'
 REPORT_KEY = 'neomatrix_reader_report_v1'
 NS = uuid.UUID('61885b90-e112-4d2f-aa1e-3476976da5e4')
+try:
+    from calibre_plugins.frankenboox.epub_identity import reading_digest, IDENTITY_SCHEMA
+except ImportError:
+    from epub_identity import reading_digest, IDENTITY_SCHEMA
+
+
+def _extract_progress_fraction(progress):
+    """Return BOOX page progress as Calibre's 0–1 fraction, or None if unknown."""
+    if not isinstance(progress, dict):
+        return None
+
+    def fraction(current, total):
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               for value in (current, total)):
+            return None
+        try:
+            current, total = float(current), float(total)
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if not (math.isfinite(current) and math.isfinite(total)):
+            return None
+        if total <= 0 or not 0 <= current <= total:
+            return None
+        return current / total
+
+    # Archived BOOX progress uses "current/total"; structured pages are the fallback.
+    raw = progress.get('raw')
+    if isinstance(raw, str):
+        match = re.fullmatch(r'\s*(\d+)\s*/\s*(\d+)\s*', raw)
+        if match:
+            try:
+                result = fraction(*map(int, match.groups()))
+            except (ValueError, OverflowError):
+                result = None
+            if result is not None:
+                return result
+    return fraction(progress.get('current_page'), progress.get('total_pages'))
 
 
 def object_value(value):
@@ -180,8 +218,9 @@ class Chapter:
 
 
 class Book:
-    def __init__(self, chapters, ids, digest):
+    def __init__(self, chapters, ids, digest, reading_sha256=None):
         self.chapters, self.ids, self.digest = chapters, ids, digest
+        self.reading_digest = reading_sha256
         self.xpath_modes = set()
 
     def calibrate(self, state):
@@ -253,7 +292,13 @@ def load_book(path):
         manifest = {el.get('id'):container.href_to_name(el.get('href'), container.opf_name)
                     for el in container.opf.xpath('//*[local-name()="manifest"]/*[local-name()="item"]')}
         ids = {ident:names.index(name) for ident,name in manifest.items() if name in names}
-    return Book(chapters, ids, digest)
+    try:
+        reading_sha256 = reading_digest(path)
+    except Exception:
+        # Calibre can read some nonstandard packages. Keep their import behavior;
+        # equivalence-based pushes require a valid conservative fingerprint.
+        reading_sha256 = None
+    return Book(chapters, ids, digest, reading_sha256)
 
 
 def stable_id(identity, item, kind):
@@ -421,7 +466,10 @@ def convert(state, book):
             {'type':'bookmark','title':'BOOX resume position','pos_type':'epubcfi','pos':resume['calibre_cfi'],'timestamp':when}])
     else:
         skipped.append('Resume position: BOOX location could not be verified; existing Calibre position retained')
-    return annotations, {'schema':1,'epub_sha256':book.digest,'resume':resume,'annotations':anchors}, skipped
+    return annotations, {'schema':1,'epub_sha256':book.digest,
+                         'epub_identity_schema':IDENTITY_SCHEMA,
+                         'epub_reading_sha256':book.reading_digest,
+                         'resume':resume,'annotations':anchors}, skipped
 
 
 def integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_position=False):
@@ -476,12 +524,16 @@ def integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_posi
             if resume_applied and hasattr(db, 'set_last_read_position'):
                 try:
                     from calibre.db.constants import EBOOK_VIEWER_DEVICE, EBOOK_VIEWER_USER
-                    db.set_last_read_position(
-                        book_id, 'EPUB', user=EBOOK_VIEWER_USER,
-                        device=EBOOK_VIEWER_DEVICE,
-                        cfi=portable['resume']['calibre_cfi'],
-                        epoch=_timestamp_seconds(apply_timestamp), pos_frac=0.0,
-                    )
+                    pos_frac = _extract_progress_fraction(state.get('progress'))
+                    if pos_frac is None:
+                        skipped.append('BOOX progress was missing or invalid; existing Calibre position index retained.')
+                    else:
+                        db.set_last_read_position(
+                            book_id, 'EPUB', user=EBOOK_VIEWER_USER,
+                            device=EBOOK_VIEWER_DEVICE,
+                            cfi=portable['resume']['calibre_cfi'],
+                            epoch=_timestamp_seconds(apply_timestamp), pos_frac=pos_frac,
+                        )
                 except Exception as error:
                     skipped.append('Viewer resume sidecar was updated, but Calibre position index was not: ' + str(error))
         except Exception as error:
