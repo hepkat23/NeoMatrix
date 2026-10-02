@@ -1,4 +1,5 @@
 """BOOX to Calibre viewer conversion. No ebook or device writes."""
+import copy
 import hashlib
 import json
 import math
@@ -92,7 +93,7 @@ def utf16(text):
 
 
 class Chapter:
-    def __init__(self, name, index, root):
+    def __init__(self, name, index, root, position_root=None):
         self.name, self.index, self.root = name, index, root
         self.parts = []
         # Each text slot records a DOM-compatible CFI and flattened text interval.
@@ -126,7 +127,11 @@ class Chapter:
         self.normalized, self.positions = ''.join(out), positions
         self.paths = {}
         body = next((el for el in root if tag(el) == 'body'), root)
-        for origin, start_el in (('html', root), ('body', body)):
+        # NeoReader counts whitespace DOM nodes and includes the document's
+        # html step. Keep that source tree separate from Calibre's normalized tree;
+        # an observed highlight must verify a mode before any resume uses it.
+        for origin, start_el in (('html', root), ('body', body),
+                                ('document', position_root if position_root is not None else root)):
             for base in (0,1):
                 mode = origin + str(base)
                 mapping = {}; self.paths[mode] = mapping
@@ -155,7 +160,8 @@ class Chapter:
                             if len(hits) == 1:
                                 mapping[tuple(child_route)] = hits[0]
                 body_index = [el for el in root if isinstance(el.tag,str)].index(body)+1 if body is not root else 1
-                walk(start_el, [], '/2' if origin == 'html' else '/2/'+str(body_index*2))
+                walk(start_el, [1] if origin == 'document' else [],
+                     '/2/'+str(body_index*2) if origin == 'body' else '/2')
 
     def resolve(self, position, mode):
         if not isinstance(position, dict):
@@ -284,11 +290,12 @@ def load_book(path):
         for i,name in enumerate(names):
             root = container.parsed(name)
             ensure_body(root)
+            position_root = copy.deepcopy(root)
             root.text = root.tail = None
             for child in tuple(root):
                 if isinstance(child.tag,str) and tag(child) not in ('head','body'):
                     root.remove(child)
-            chapters.append(Chapter(name,i,root))
+            chapters.append(Chapter(name,i,root,position_root))
         manifest = {el.get('id'):container.href_to_name(el.get('href'), container.opf_name)
                     for el in container.opf.xpath('//*[local-name()="manifest"]/*[local-name()="item"]')}
         ids = {ident:names.index(name) for ident,name in manifest.items() if name in names}

@@ -1,4 +1,4 @@
-NeoMatrix 1.4.1 — BOOX reading data in Calibre
+NeoMatrix 1.4.2 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -64,6 +64,10 @@ Diagnosis exports contain private book/reading data; nothing is uploaded by the
 plugin. The release ZIP excludes device snapshots, books, backups and diagnostics.
 
 VALIDATION
+Version 1.4.2 preserves NeoReader document-root and whitespace paths separately
+from Calibre CFI paths. Observed highlight quotes verify the path convention
+before resume conversion; missing or inconsistent evidence remains unsupported.
+
 Version 1.4.1 was checked against actual Calibre and BOOX copies of two EPUBs
 whose only differences were metadata and Calibre bookmarks. Reading resources,
 chapter identities and converted anchors matched. A third EPUB with a changed

@@ -485,11 +485,11 @@ class FrankenDialog(QDialog):
         self.supplemental_sources = []
         self.collection_source = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.1')
+        self.setWindowTitle('NeoMatrix — v1.4.2')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.1</b><br>'
+            '<b>NeoMatrix v1.4.2</b><br>'
             'Save and close your books, connect BOOX by USB, then press <b>Sync</b>. '
             'NeoMatrix saves changed reading data in Calibre and <b>asks before sending newer positions to BOOX.</b> '
             'Unsupported positions stay unchanged.'
