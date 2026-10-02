@@ -108,4 +108,16 @@ class FarthestProgress(unittest.TestCase):
         self.write_old(self.cfi(1,1))
         self.assertTrue(bridge._write_sidecar_resume(self.path,{'calibre_cfi':self.cfi(0,2)},'2026-10-02T00:00:00+00:00',force=True)[0])
 
+    def test_spatial_cfi_is_not_compared_using_approximate_text_order(self):
+        cfi=self.cfi(0,2).rsplit('/',1)[0]+'@25:50)'
+        with self.assertRaisesRegex(ValueError,'Spatial reading positions'):
+            farthest_position([{'cfi':cfi,'epoch':2000}],self.path)
+
+    def test_incoming_spatial_cfi_does_not_overwrite_exact_position(self):
+        self.write_old(self.cfi(0,2));before=self.sidecar.read_bytes()
+        cfi=self.cfi(0,2).rsplit('/',1)[0]+'@25:50)'
+        with self.assertRaisesRegex(ValueError,'Spatial reading positions'):
+            bridge._write_sidecar_resume(self.path,{'calibre_cfi':cfi},'2026-10-02T00:00:00+00:00')
+        self.assertEqual(self.sidecar.read_bytes(),before)
+
 if __name__=='__main__':unittest.main()

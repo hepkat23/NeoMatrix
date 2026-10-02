@@ -33,7 +33,7 @@ integration = load('integration')
 reader = ModuleType('calibre_plugins.frankenboox.reader_bridge')
 reader.ANCHOR_KEY = 'neomatrix_portable_anchors_v1'
 reader.REPORT_KEY = 'neomatrix_reader_report_v1'
-reader.READER_MAPPING_VERSION = 3
+reader.READER_MAPPING_VERSION = 4
 sys.modules[reader.__name__] = reader
 
 tree = ast.parse((ROOT / 'main.py').read_text())
@@ -321,7 +321,7 @@ class IncrementalSyncTests(unittest.TestCase):
         self.ui.sync_direct()
         self.assertEqual(sum(e[0] == 'reader' for e in self.db.events), 1)
         self.assertEqual({e[1] for e in self.db.events}, {1})
-        self.assertEqual(self.db.data[reader.REPORT_KEY][1]['mapping_version'], 3)
+        self.assertEqual(self.db.data[reader.REPORT_KEY][1]['mapping_version'], 4)
         self.db.events.clear()
         self.ui.sync_direct()
         self.assertEqual(self.db.events, [])

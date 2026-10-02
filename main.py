@@ -485,11 +485,11 @@ class FrankenDialog(QDialog):
         self.supplemental_sources = []
         self.collection_source = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.4')
+        self.setWindowTitle('NeoMatrix — v1.4.5')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.4</b><br>'
+            '<b>NeoMatrix v1.4.5</b><br>'
             'Close your books, connect BOOX by USB, then press <b>Sync</b>. '
             'Sync keeps your farthest reading position when it can match the book. '
             'You’ll be asked before positions are sent to BOOX.'
@@ -1242,6 +1242,9 @@ class FrankenDialog(QDialog):
         for book_id, report in sorted(reports.items()):
             title = self.db.field_for('title', book_id) or str(book_id)
             position = 'Updated in Calibre' if report.get('resume_applied') else ('Existing Calibre position kept' if report.get('resume') else 'Reading position could not be synced')
+            if not report.get('resume'):
+                position = {'image-only-start':'Cover or title page; Calibre position kept',
+                            'different-formats':'Different formats; Calibre position kept'}.get(report.get('resume_issue_kind'), position)
             lines.append(str(title) + ': ' + position + '; ' + str(report.get('mapped',0)) + ' note(s) imported')
             lines.extend('  '+str(x) for x in report.get('skipped',[]))
         dlg = QDialog(self); dlg.setWindowTitle('NeoMatrix — Sync details'); dlg.resize(850,600)
@@ -1448,7 +1451,8 @@ class FrankenDialog(QDialog):
             if not self.db.format_abspath(book_id, 'EPUB'):
                 issues.append(str(title) + ': reading-position conversion supports EPUB only.')
             else:
-                issues.append(str(title) + ': BOOX reading position is unverified; Calibre position was kept. Reader handoff may use an older position.')
+                reason = report.get('resume_issue') or 'BOOX reading position is unverified; Calibre position was kept. Reader handoff may use an older position.'
+                issues.append(str(title) + ': ' + reason)
         return issues
 
     def _pending_archive_entries(self):

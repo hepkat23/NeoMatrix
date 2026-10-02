@@ -46,5 +46,39 @@ class DocumentPaths(unittest.TestCase):
             _, anchors, _ = convert(state, book)
             self.assertIsNone(anchors['resume'])
 
+    def test_alternative_document_roots_require_matching_quote_evidence(self):
+        for prefix in (0, 2, 3):
+            with self.subTest(prefix=prefix):
+                book, state = self.fixture()
+                for item in state['annotations']['active']:
+                    item['location_begin']['xpath'][0] = prefix
+                state['progress']['current_page_position_v3']['xpath'][0] = prefix
+                _, anchors, _ = convert(state, book)
+                self.assertEqual(book.xpath_modes, {'document0prefix' + str(prefix)})
+                self.assertEqual(anchors['resume']['calibre_cfi'], 'epubcfi(/2/2/4/6/2/1:8)')
+
+    def test_alternative_root_without_quotes_cannot_map_resume(self):
+        for prefix in (0, 2, 3):
+            book, state = self.fixture()
+            state['annotations']['active'] = []
+            state['progress']['current_page_position_v3']['xpath'][0] = prefix
+            self.assertIsNone(convert(state, book)[1]['resume'])
+
+    def test_pdf_position_is_not_treated_as_epub_even_if_path_matches(self):
+        book, state = self.fixture()
+        state['boox_book'] = {'format': 'pdf'}
+        _, portable, _ = convert(state, book)
+        self.assertIsNone(portable['resume'])
+        self.assertEqual(portable['resume_issue_kind'], 'different-formats')
+        self.assertIn('BOOX uses PDF; Calibre has EPUB', portable['resume_issue'])
+
+    def test_image_only_start_is_reported_separately(self):
+        chapter = Chapter('cover.xhtml', 0, ET.fromstring('<html><head/><body><img src="cover.jpg"/></body></html>'))
+        book = Book([chapter], {'cover': 0}, 'a'*64)
+        state = {'progress': {'current_page_position_v3': {'chapterID': 'cover', 'nodePosition': 0, 'textOffset': 0, 'xpath': []}}}
+        _, portable, _ = convert(state, book)
+        self.assertIsNone(portable['resume'])
+        self.assertEqual(portable['resume_issue_kind'], 'image-only-start')
+
 if __name__ == '__main__':
     unittest.main()

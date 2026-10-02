@@ -1,4 +1,4 @@
-NeoMatrix 1.4.4 — BOOX reading data in Calibre
+NeoMatrix 1.4.5 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -98,3 +98,8 @@ Calibre last-read sources, regardless of timestamps. Uncomparable locations are
 preserved and reported. Tools > Use BOOX reading position is an explicit override.
 The EPUB CFI resolver is shared with the CrossPoint SD plugin in this repository
 family so both plugins compare the same spine/text ordering.
+
+1.4.5: Verify additional BOOX document-root path conventions using each book's
+highlight quotes. Sync details distinguish image-only cover/title-page starts,
+BOOX PDF versus Calibre EPUB copies, and unresolved text locations. Existing
+positions are preserved whenever a safe comparison is unavailable.

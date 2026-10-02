@@ -48,7 +48,7 @@ def prepare_sync(owner, entries, status, device_factory=None):
             boox = portable.get('resume')
             if not boox:
                 keep[bid] = True
-                issues.append(title + ': BOOX position cannot be compared safely; no position sent')
+                issues.append(title + ': ' + (portable.get('resume_issue') or 'BOOX position cannot be compared safely; no position sent'))
                 continue
             mapper = EpubPositionMapper(path)
             local_rank = mapper.cfi_to_offset(position['cfi'])

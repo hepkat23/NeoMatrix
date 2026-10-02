@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 ANCHOR_KEY = 'neomatrix_portable_anchors_v1'
 REPORT_KEY = 'neomatrix_reader_report_v1'
 # Bump when conversion rules change so unchanged EPUBs are reintegrated once.
-READER_MAPPING_VERSION = 3
+READER_MAPPING_VERSION = 4
 NS = uuid.UUID('61885b90-e112-4d2f-aa1e-3476976da5e4')
 try:
     from calibre_plugins.frankenboox.epub_identity import reading_digest, IDENTITY_SCHEMA
@@ -164,6 +164,16 @@ class Chapter:
                 body_index = [el for el in root if isinstance(el.tag,str)].index(body)+1 if body is not root else 1
                 walk(start_el, [1] if origin == 'document' else [],
                      '/2/'+str(body_index*2) if origin == 'body' else '/2')
+
+        # Observed NeoReader records use different document-root indices.
+        # These alternatives are candidates only: unique highlight quotes must
+        # verify the convention for this book before any resume can use it.
+        for mode in ('document0', 'document1'):
+            for prefix in (0, 2, 3):
+                self.paths[mode + 'prefix' + str(prefix)] = {
+                    (prefix,) + route[1:]: offset
+                    for route, offset in self.paths[mode].items()
+                }
 
     def resolve(self, position, mode):
         if not isinstance(position, dict):
@@ -392,7 +402,7 @@ def _write_sidecar_resume(epub_path, resume, timestamp, force=False, current_pos
             best = farthest_position(records, epub_path)
             mapper = EpubPositionMapper(epub_path)
             try:
-                if '%' in incoming['pos']:
+                if '%' in incoming['pos'] or '@' in incoming['pos']:
                     raise ValueError('Spatial reading positions cannot be compared exactly')
                 if mapper.cfi_to_offset(incoming['pos']) <= mapper.cfi_to_offset(best['cfi']):
                     return False, {'pos': best['cfi'], 'timestamp': datetime.fromtimestamp(best['epoch_ms']/1000, timezone.utc).isoformat(), 'pos_type': 'epubcfi'}
@@ -459,11 +469,12 @@ def convert(state, book):
     backend = object_value(object_value((state.get('raw_metadata_row') or {}).get('extraAttributes')).get('backend'))
     resume = None
     resume_positions = []
+    source_format = str((state.get('boox_book') or {}).get('format') or 'epub').lower()
     for key in ('current_page_position_v3','current_page_position_v2','backend_current_page'):
         position = object_value(progress.get(key) or progress.get(key+'_raw') or backend.get(key.replace('backend_','')))
         if position:
             resume_positions.append(position)
-        resume = book.position(position)
+        resume = book.position(position) if source_format == 'epub' else None
         if resume:
             break
     # NeoReader often creates a bookmark at the exact current reading
@@ -471,7 +482,7 @@ def convert(state, book):
     # use that bookmark's unique quote as a verified text anchor. This is
     # still deterministic: the structured position must match exactly and
     # the quote must occur once in the EPUB.
-    if not resume and resume_positions:
+    if not resume and resume_positions and source_format == 'epub':
         for item in (state.get('bookmarks') or {}).get('active', []):
             quote = item.get('quote') or ''
             bookmark_position = object_value(
@@ -485,6 +496,8 @@ def convert(state, book):
             if match:
                 resume = match[0].anchor(match[1], 'resume-from-bookmark-quote')
                 break
+    issue_kind = None
+    issue_reason = None
     if resume:
         when = utc_stamp(progress.get('last_access_ms') or progress.get('last_access_utc'))
         resume = dict(resume, timestamp=when)
@@ -492,11 +505,23 @@ def convert(state, book):
             {'type':'last-read','pos_type':'epubcfi','pos':resume['calibre_cfi'],'timestamp':when},
             {'type':'bookmark','title':'BOOX resume position','pos_type':'epubcfi','pos':resume['calibre_cfi'],'timestamp':when}])
     else:
-        skipped.append('Resume position: BOOX location could not be verified; existing Calibre position retained')
+        issue_kind = 'unverified'
+        issue_reason = 'BOOX reading position is unverified; Calibre position was kept. Reader handoff may use an older position.'
+        if source_format != 'epub':
+            issue_kind = 'different-formats'
+            issue_reason = 'BOOX uses ' + source_format.upper() + '; Calibre has EPUB. Reading position could not be matched across these formats; Calibre position was kept.'
+        elif resume_positions:
+            position = resume_positions[0]
+            chapter = book.chapter_for(position)
+            if (chapter is not None and not chapter.text.strip()
+                    and position.get('nodePosition') == 0 and position.get('textOffset') == 0):
+                issue_kind = 'image-only-start'
+                issue_reason = 'BOOX is at an image-only cover or title page; no text position can be transferred. Calibre position was kept.'
+        skipped.append('Resume position: ' + issue_reason)
     return annotations, {'schema':1,'epub_sha256':book.digest,
                          'epub_identity_schema':IDENTITY_SCHEMA,
                          'epub_reading_sha256':book.reading_digest,
-                         'resume':resume,'annotations':anchors}, skipped
+                         'resume':resume, 'resume_issue':issue_reason, 'resume_issue_kind':issue_kind, 'annotations':anchors}, skipped
 
 
 def integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_position=False):
@@ -598,7 +623,8 @@ def _integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_pos
     elif portable['resume'] and resume_retained:
         skipped.append('The farthest Calibre position was retained. Use Tools → Use BOOX reading position to apply the BOOX position explicitly.')
     report = {'mapping_version':READER_MAPPING_VERSION, 'mapped':len(portable['annotations']), 'resume':bool(portable['resume']),
-              'resume_applied':resume_applied, 'skipped':skipped}
+              'resume_applied':resume_applied, 'resume_issue':portable.get('resume_issue'),
+              'resume_issue_kind':portable.get('resume_issue_kind'), 'skipped':skipped}
     db.add_custom_book_data(ANCHOR_KEY,{book_id:portable},delete_first=False)
     db.add_custom_book_data(REPORT_KEY,{book_id:report},delete_first=False)
     return report

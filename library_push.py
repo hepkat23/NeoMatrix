@@ -61,7 +61,7 @@ def farthest_position(records, path):
             cfi = record.get('cfi') or record.get('pos')
             if not cfi:
                 continue
-            if '%' in cfi:
+            if '%' in cfi or '@' in cfi:
                 raise ValueError('Spatial reading positions cannot be compared exactly')
             rank = mapper.cfi_to_offset(cfi)
             try:
