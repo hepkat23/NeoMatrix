@@ -1,4 +1,4 @@
-NeoMatrix 1.4.3 — BOOX reading data in Calibre
+NeoMatrix 1.4.4 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -91,3 +91,10 @@ MAPPING UPDATES
 After a reading-position mapper update, Sync rechecks existing EPUB archives
 once even when BOOX data has not changed. Remaining unsupported positions are
 listed in the sync summary, including on repeat syncs. No page turn is needed.
+
+PROGRESS CONFLICTS
+Automatic sync retains the farthest verified EPUB location across BOOX and all
+Calibre last-read sources, regardless of timestamps. Uncomparable locations are
+preserved and reported. Tools > Use BOOX reading position is an explicit override.
+The EPUB CFI resolver is shared with the CrossPoint SD plugin in this repository
+family so both plugins compare the same spine/text ordering.

@@ -12,7 +12,7 @@ class Book:
     digest = 'b' * 64
     def position(self, position):
         if position['chapterID'] in ('one', 'two'):
-            return {'calibre_cfi': 'epubcfi(' + position['chapterID'] + ')'}
+            return {'calibre_cfi': 'epubcfi(' + position['chapterID'] + ')', 'spine_index': 1 if position['chapterID']=='one' else 0, 'text_offset': position.get('textOffset',0)}
     def quote(self, *args):
         return None
 
@@ -43,6 +43,16 @@ class PushPlans(unittest.TestCase):
         self.assertEqual(plan['position'], ONE)
         self.assertEqual(plan['expected_extra_attributes'], self.row['extraAttributes'])
         self.assertEqual(before, (self.state, self.row, self.calibre))
+
+    def test_newer_but_earlier_calibre_position_is_not_pushed(self):
+        original = self.book.position
+        def rank(position):
+            anchor = original(position)
+            if anchor:
+                anchor['spine_index'] = 0 if position['chapterID']=='one' else 1
+            return anchor
+        self.book.position = rank
+        self.assertEqual(self.plan()['status'], 'unchanged')
 
     def test_current_location_is_noop_even_when_timestamp_is_old(self):
         self.calibre.update(cfi='epubcfi(two)', epoch_ms=1)
@@ -75,9 +85,11 @@ class PushPlans(unittest.TestCase):
         self.row['lastAccess'] = '1500'
         self.assertEqual(self.plan()['status'], 'conflict')
 
-    def test_old_calibre_position_is_not_written(self):
+    def test_older_but_farther_calibre_position_is_written(self):
         self.calibre['epoch_ms'] = 999
-        self.assertEqual(self.plan()['status'], 'conflict')
+        plan = self.plan()
+        self.assertEqual(plan['status'], 'ready')
+        self.assertGreater(plan['calibre_epoch_ms'], 1000)
 
     def test_invalid_timestamps_fail_closed(self):
         for value in (None, True, False, 0, '0', 1.1, -1, 'nan', ' 2000'):

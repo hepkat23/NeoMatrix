@@ -1,4 +1,4 @@
-"""Review newer Calibre positions during normal Sync; push only after approval."""
+"""Review farthest verified positions during normal Sync; push only after approval."""
 import hashlib
 from pathlib import Path
 from uuid import uuid4
@@ -15,67 +15,74 @@ except ImportError:
 
 
 def prepare_sync(owner, entries, status, device_factory=None):
-    """Read both sides. Retain newer local positions even when push is unsupported."""
-    plans, keep, issues, device = [], {}, [], None
-    anchors = owner.db.get_custom_book_data(ANCHOR_KEY)
+    """Compare verified locations; never let a timestamp alone rewind a reader."""
+    try:
+        from calibre_plugins.frankenboox.reader_bridge import load_book, convert
+        from calibre_plugins.frankenboox.epub_position import EpubPositionMapper
+    except ImportError:
+        from reader_bridge import load_book, convert
+        from epub_position import EpubPositionMapper
+    plans, keep, issues, device, pull = [], {}, [], None, []
     for bid, current, files in entries:
         path = owner.db.format_abspath(bid, 'EPUB')
-        if not path:continue
+        if not path:
+            continue
         title = owner.db.field_for('title', bid) or str(bid)
         try:
             position = calibre_position(owner.db, bid, path)
-        except ValueError:
-            # No saved position on this side: there is nothing to push.
-            continue
-        except Exception:
-            keep[bid] = True
-            issues.append(title + ': could not check the saved Calibre position; kept it unchanged')
-            continue
-        try:boox_time = int((current.get('progress') or {}).get('last_access_ms') or 0)
-        except (ValueError, TypeError):boox_time = 0
-        archived, _ = owner._archived_state_for_book(bid)
-        portable = anchors.get(bid) or {}
-        if archived:
-            try:
-                baseline = int((archived.get('progress') or {}).get('last_access_ms') or 0)
-                local_changed = (position['epoch_ms'] > baseline and
-                                 position['cfi'] != (portable.get('resume') or {}).get('calibre_cfi'))
-                device_changed = (boox_time != baseline or
-                                  _resume(_backend(archived['raw_metadata_row'])[2]) != _resume(_backend(current['raw_metadata_row'])[2]))
-                if local_changed and device_changed:
-                    keep[bid] = True
-                    issues.append(title + ': both reading positions changed since the last pull; Calibre position kept and no position sent')
-                    continue
-            except (ValueError, TypeError, KeyError):
-                pass
-        if position['epoch_ms'] <= boox_time:continue
-        keep[bid] = True
-        if not archived:
-            issues.append(title + ': first save BOOX data with Sync; newer Calibre position kept')
-            continue
-        if not (archived.get('boox_identity') or {}).get('metadata_uuid'):
-            issues.append(title + ': saved BOOX copy identity is missing; Calibre position kept')
-            continue
-        try:
-            # A newer timestamp alone does not require a device write.
-            if ((portable.get('resume') or {}).get('calibre_cfi') == position['cfi'] and
-                    archived.get('boox_identity') == current.get('boox_identity') and
-                    _resume(_backend(archived['raw_metadata_row'])[2]) == _resume(_backend(current['raw_metadata_row'])[2])):
+        except ValueError as error:
+            if str(error).startswith('No saved Calibre EPUB reading position'):
                 continue
-            status('Checking newer Calibre position: ' + title)
+            keep[bid] = True
+            issues.append(title + ': ' + str(error) + '; positions kept unchanged')
+            continue
+        except Exception as error:
+            keep[bid] = True
+            issues.append(title + ': could not compare Calibre position; positions kept unchanged')
+            continue
+        mapper = None
+        try:
+            status('Comparing reading locations: ' + title)
+            book = load_book(path)
+            _, portable, _ = convert(current, book)
+            boox = portable.get('resume')
+            if not boox:
+                keep[bid] = True
+                issues.append(title + ': BOOX position cannot be compared safely; no position sent')
+                continue
+            mapper = EpubPositionMapper(path)
+            local_rank = mapper.cfi_to_offset(position['cfi'])
+            device_rank = mapper.cfi_to_offset(boox['calibre_cfi'])
+            if local_rank < device_rank:
+                pull.append(bid)
+                continue
+            if local_rank == device_rank:
+                continue
+            keep[bid] = True
+            if not (current.get('boox_identity') or {}).get('metadata_uuid'):
+                issues.append(title + ': BOOX copy identity is missing; Calibre position kept')
+                continue
             if device is None:
-                if device_factory:device = device_factory()
+                if device_factory:
+                    device = device_factory()
                 else:
                     from calibre_plugins.frankenboox.main import find_adb
                     adb = find_adb()
-                    if not adb:raise PushError('Connect BOOX and install Android Platform Tools')
+                    if not adb:
+                        raise PushError('Connect BOOX and install Android Platform Tools')
                     device = AdbReadingDevice(adb)
-            plan = preview(owner.db, bid, archived, device, current_row=current.get('raw_metadata_row'))
+            plan = preview(owner.db, bid, current, device, current_row=current.get('raw_metadata_row'))
             if plan['status'] == 'ready':
-                plans.append({'book_id': bid, 'title': title, 'path': plan['book_path'], 'plan': plan})
-            elif plan['status'] != 'unchanged':issues.append(title + ': ' + plan['reason'] + '; Calibre position kept')
-        except Exception as error:issues.append(title + ': ' + str(error) + '; Calibre position kept')
-    return {'plans': plans, 'keep': keep, 'issues': issues, 'device': device}
+                plans.append({'book_id':bid, 'title':title, 'path':plan['book_path'], 'plan':plan})
+            elif plan['status'] != 'unchanged':
+                issues.append(title + ': ' + plan['reason'] + '; Calibre position kept')
+        except Exception as error:
+            keep[bid] = True
+            issues.append(title + ': ' + str(error) + '; positions kept unchanged')
+        finally:
+            if mapper:
+                mapper.close()
+    return {'plans':plans, 'keep':keep, 'issues':issues, 'device':device, 'pull':pull}
 
 
 def default_backup_directory():

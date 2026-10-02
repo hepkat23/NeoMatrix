@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 ANCHOR_KEY = 'neomatrix_portable_anchors_v1'
 REPORT_KEY = 'neomatrix_reader_report_v1'
 # Bump when conversion rules change so unchanged EPUBs are reintegrated once.
-READER_MAPPING_VERSION = 2
+READER_MAPPING_VERSION = 3
 NS = uuid.UUID('61885b90-e112-4d2f-aa1e-3476976da5e4')
 try:
     from calibre_plugins.frankenboox.epub_identity import reading_digest, IDENTITY_SCHEMA
@@ -364,7 +364,7 @@ def _timestamp_seconds(value):
         return 0.0
 
 
-def _write_sidecar_resume(epub_path, resume, timestamp, force=False):
+def _write_sidecar_resume(epub_path, resume, timestamp, force=False, current_position=None):
     """Persist one viewer resume position and report whether it won.
 
     Returns ``(applied, displaced_last_read)``.  The write is atomic and keeps
@@ -380,8 +380,24 @@ def _write_sidecar_resume(epub_path, resume, timestamp, force=False):
     }
     old = [entry for entry in entries if entry.get('type') == 'last-read']
     previous = max(old, key=lambda entry: _timestamp_seconds(entry.get('timestamp')), default=None)
-    if previous and not force and _timestamp_seconds(previous.get('timestamp')) > _timestamp_seconds(incoming['timestamp']):
-        return False, previous
+    if not force:
+        try:
+            from calibre_plugins.frankenboox.library_push import farthest_position
+            from calibre_plugins.frankenboox.epub_position import EpubPositionMapper
+        except ImportError:
+            from library_push import farthest_position
+            from epub_position import EpubPositionMapper
+        records = old + ([current_position] if current_position else [])
+        if records:
+            best = farthest_position(records, epub_path)
+            mapper = EpubPositionMapper(epub_path)
+            try:
+                if '%' in incoming['pos']:
+                    raise ValueError('Spatial reading positions cannot be compared exactly')
+                if mapper.cfi_to_offset(incoming['pos']) <= mapper.cfi_to_offset(best['cfi']):
+                    return False, {'pos': best['cfi'], 'timestamp': datetime.fromtimestamp(best['epoch_ms']/1000, timezone.utc).isoformat(), 'pos_type': 'epubcfi'}
+            finally:
+                mapper.close()
 
     kept = [entry for entry in entries if entry.get('type') != 'last-read']
     kept.append(incoming)
@@ -393,6 +409,8 @@ def _write_sidecar_resume(epub_path, resume, timestamp, force=False):
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
+        if _sidecar_entries(path) != entries:
+            raise ValueError('Calibre viewer position changed during sync; try again')
         os.replace(temporary, path)
     except Exception:
         try:
@@ -484,6 +502,18 @@ def convert(state, book):
 def integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_position=False):
     path = db.format_abspath(book_id, 'EPUB')
     if not path:
+        return _integrate_reader(db, book_id, state, use_boox_position, keep_boox_position)
+    try:
+        from calibre_plugins.frankenboox.progress_lock import progress_lock
+    except ImportError:
+        from progress_lock import progress_lock
+    with progress_lock(_viewer_sidecar_path(path)):
+        return _integrate_reader(db, book_id, state, use_boox_position, keep_boox_position)
+
+
+def _integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_position=False):
+    path = db.format_abspath(book_id, 'EPUB')
+    if not path:
         report = {'mapped':0,'resume':False,'skipped':['Native reader integration currently supports EPUB only']}
         db.add_custom_book_data(REPORT_KEY,{book_id:report},delete_first=False)
         return report
@@ -512,11 +542,22 @@ def integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_posi
     elif portable['resume']:
         try:
             apply_timestamp = now.isoformat() if use_boox_position else portable['resume'].get('timestamp')
+            current_position = None
+            if not use_boox_position:
+                try:
+                    from calibre_plugins.frankenboox.library_push import calibre_position
+                except ImportError:
+                    from library_push import calibre_position
+                try:
+                    current_position = calibre_position(db, book_id, path)
+                except ValueError as error:
+                    if not str(error).startswith('No saved Calibre EPUB reading position'):
+                        raise
             resume_applied, previous = _write_sidecar_resume(
                 path,
                 portable['resume'],
                 apply_timestamp or (state.get('progress') or {}).get('last_access_ms'),
-                force=use_boox_position,
+                force=use_boox_position, current_position=current_position,
             )
             resume_retained = not resume_applied and previous is not None
             if use_boox_position and previous and previous.get('pos') != portable['resume']['calibre_cfi']:
@@ -555,7 +596,7 @@ def integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_posi
     if portable['resume'] and resume_kept_by_choice:
         skipped.append('Existing Calibre position was kept by the sync choice. Use Tools → Use BOOX reading position to apply the BOOX position explicitly.')
     elif portable['resume'] and resume_retained:
-        skipped.append('A newer Calibre position was retained. Use Tools → Use BOOX reading position to apply the BOOX position explicitly.')
+        skipped.append('The farthest Calibre position was retained. Use Tools → Use BOOX reading position to apply the BOOX position explicitly.')
     report = {'mapping_version':READER_MAPPING_VERSION, 'mapped':len(portable['annotations']), 'resume':bool(portable['resume']),
               'resume_applied':resume_applied, 'skipped':skipped}
     db.add_custom_book_data(ANCHOR_KEY,{book_id:portable},delete_first=False)

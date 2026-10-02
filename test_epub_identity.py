@@ -117,7 +117,7 @@ class FakeBook:
     digest = 'a' * 64
     reading_digest = 'c' * 64
     def position(self, value):
-        return {'calibre_cfi': 'epubcfi(/6/4!/4/2:0)'} if value.get('chapterID') == 'b' else None
+        return {'calibre_cfi': 'epubcfi(/6/4!/4/2:0)' if value.get('chapterID') == 'b' else 'epubcfi(/6/2!/4/2:0)', 'spine_index': 1 if value.get('chapterID') == 'b' else 0, 'text_offset': 0}
 
 def fixture():
     old = {'chapterID': 'a', 'nodePosition': 0, 'textOffset': 0}

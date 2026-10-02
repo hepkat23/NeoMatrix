@@ -13,6 +13,7 @@ import sqlite3
 import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).parent
@@ -32,13 +33,13 @@ integration = load('integration')
 reader = ModuleType('calibre_plugins.frankenboox.reader_bridge')
 reader.ANCHOR_KEY = 'neomatrix_portable_anchors_v1'
 reader.REPORT_KEY = 'neomatrix_reader_report_v1'
-reader.READER_MAPPING_VERSION = 2
+reader.READER_MAPPING_VERSION = 3
 sys.modules[reader.__name__] = reader
 
 tree = ast.parse((ROOT / 'main.py').read_text())
 dialog = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'FrankenDialog')
 method_names = ('sync_direct', '_archive_payload', '_reader_sync_complete', '_archive_is_current',
-                '_pending_archive_entries', '_resume_sync_issues', '_archive_files_to_write', 'archive',
+                '_pending_archive_entries', '_sync_issue_summary', '_resume_sync_issues', '_archive_files_to_write', 'archive',
                 '_archived_state_for_book', '_annotations_for', '_bookmarks_for', '_stats_for',
                 '_readernote_for', '_points_for', '_best_fallback', '_carry_forward_unchanged_handwriting')
 definitions = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
@@ -320,7 +321,7 @@ class IncrementalSyncTests(unittest.TestCase):
         self.ui.sync_direct()
         self.assertEqual(sum(e[0] == 'reader' for e in self.db.events), 1)
         self.assertEqual({e[1] for e in self.db.events}, {1})
-        self.assertEqual(self.db.data[reader.REPORT_KEY][1]['mapping_version'], 2)
+        self.assertEqual(self.db.data[reader.REPORT_KEY][1]['mapping_version'], 3)
         self.db.events.clear()
         self.ui.sync_direct()
         self.assertEqual(self.db.events, [])
@@ -340,11 +341,20 @@ class IncrementalSyncTests(unittest.TestCase):
         self.db.events.clear()
         self.ui.sync_direct()
         self.assertEqual(self.db.events, [])
-        self.assertIn('BOOX reading position is unverified', self.ui.summary_text)
-        self.assertIn('Reader handoff may use an older position', self.ui.summary_text)
+        self.assertIn('1 book needs attention', self.ui.summary_text)
+        self.assertIn('More… → Sync details', self.ui.summary_text)
+        self.assertTrue(any('BOOX reading position is unverified' in x for x in self.ui.last_sync_issues))
         self.db.data[reader.REPORT_KEY][1]['resume'] = True
         self.ui.sync_direct()
-        self.assertNotIn('BOOX reading position is unverified', self.ui.summary_text)
+        self.assertNotIn('need attention', self.ui.summary_text)
+        self.assertFalse(any('BOOX reading position is unverified' in x for x in self.ui.last_sync_issues))
+
+    def test_unchanged_archive_reintegrates_when_boox_is_farther(self):
+        module = sys.modules['calibre_plugins.frankenboox.sync_flow']
+        with patch.object(module, 'prepare_sync', return_value={'plans':[], 'keep':{}, 'issues':[], 'device':None, 'pull':[1]}):
+            self.ui.sync_direct()
+        self.assertEqual(sum(event[0]=='reader' for event in self.db.events),1)
+        self.assertEqual({event[1] for event in self.db.events},{1})
 
     def test_repeat_sync_has_zero_writes_and_does_not_prompt(self):
         before = {p: (p.stat().st_mtime_ns, p.read_bytes()) for p in self.db.root.rglob('*') if p.is_file()}

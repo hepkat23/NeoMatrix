@@ -46,15 +46,45 @@ def newest_position(records):
     return current[0]
 
 
+def farthest_position(records, path):
+    """Choose the farthest resolvable CFI; time only breaks equal-position ties."""
+    try:
+        from calibre_plugins.frankenboox.epub_position import EpubPositionMapper
+    except ImportError:
+        from epub_position import EpubPositionMapper
+    candidates = []
+    mapper = EpubPositionMapper(path)
+    try:
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            cfi = record.get('cfi') or record.get('pos')
+            if not cfi:
+                continue
+            if '%' in cfi:
+                raise ValueError('Spatial reading positions cannot be compared exactly')
+            rank = mapper.cfi_to_offset(cfi)
+            try:
+                when = _epoch_ms(record.get('epoch') if 'epoch' in record else record.get('timestamp'))
+            except (ValueError, TypeError, OverflowError, OSError):
+                when = 0
+            candidates.append((rank, when, cfi))
+    finally:
+        mapper.close()
+    if not candidates:
+        raise ValueError('No saved Calibre EPUB reading position; close the viewer after reading')
+    rank, when, cfi = max(candidates)
+    return {'cfi': cfi, 'epoch_ms': when}
+
+
 def calibre_position(db, book_id, path):
     from calibre.db.constants import EBOOK_VIEWER_USER, EBOOK_VIEWER_DEVICE
-    records = [x for x in db.get_last_read_positions(book_id, fmt='EPUB', user=EBOOK_VIEWER_USER)
-               if x.get('device') == EBOOK_VIEWER_DEVICE]
+    records = list(db.get_last_read_positions(book_id, fmt='EPUB', user=EBOOK_VIEWER_USER))
     records += [x for x in db.annotations_map_for_book(book_id, 'EPUB', user_type='local', user='viewer').get('last-read', [])
                 if x.get('pos_type') == 'epubcfi']
     records += [x for x in _sidecar_entries(_viewer_sidecar_path(path))
                 if x.get('type') == 'last-read' and x.get('pos_type') == 'epubcfi']
-    return newest_position(records)
+    return farthest_position(records, path)
 
 
 def preview(db, book_id, state, device, current_row=None):

@@ -61,7 +61,7 @@ def observed_positions(state, book):
                     chapter, start, end = match
                     anchor = chapter.anchor(start, 'observed-bookmark-quote')
             if anchor and isinstance(anchor.get('calibre_cfi'), str):
-                candidates.append({'cfi': anchor['calibre_cfi'], 'position': pos,
+                candidates.append({'cfi': anchor['calibre_cfi'], 'anchor': anchor, 'position': pos,
                                    'raw_position': value if isinstance(value, str) else json.dumps(pos, separators=(',', ':'))})
         except (ValueError, TypeError, KeyError):
             pass
@@ -132,8 +132,13 @@ def plan_position(state, book, current_row, calibre_position, device_sha256, dev
         archived_backend = _backend(state.get('raw_metadata_row') or {})[2]
         if _resume(archived_backend) != current:
             return result('conflict', 'BOOX position changed since the last pull')
-        if calibre_ms <= device_ms:
-            return result('conflict', 'Calibre reading position is not newer than BOOX')
+        current_anchor = book.position(current)
+        if not current_anchor:
+            return result('unsupported', 'Current BOOX location cannot be compared safely; no position sent')
+        target_rank = (target['anchor']['spine_index'], target['anchor']['text_offset'])
+        current_rank = (current_anchor['spine_index'], current_anchor['text_offset'])
+        if target_rank <= current_rank:
+            return result('unchanged', 'BOOX already has the farthest reading position')
     except (ValueError, TypeError, AttributeError, KeyError):
         return result('unsupported', 'Required identity, position or timestamp data is missing or invalid')
     return {'status': 'ready', 'reason': 'Verified observed position is ready for explicit push',
@@ -141,4 +146,4 @@ def plan_position(state, book, current_row, calibre_position, device_sha256, dev
             'book_path': identity['path'], 'file_md5': expected_md5, 'file_sha256': device_sha256,
             'expected_extra_attributes': raw, 'expected_last_access': current_row['lastAccess'],
             'position': target['position'], 'position_raw': target['raw_position'],
-            'calibre_epoch_ms': calibre_ms}
+            'calibre_epoch_ms': max(calibre_ms, device_ms + 1)}

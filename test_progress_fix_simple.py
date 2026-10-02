@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import reader_bridge as bridge
+import library_push
 
 
 class ProgressFractionTests(unittest.TestCase):
@@ -65,11 +66,12 @@ class StandardProgressWriteTests(unittest.TestCase):
     def integrate(self, progress, applied=True, resume=True, **choices):
         portable = {'resume': {'calibre_cfi': self.cfi, 'timestamp': self.timestamp}
                     if resume else None, 'annotations': []}
-        with patch.object(bridge, 'load_book'), \
+        with patch.object(library_push, 'calibre_position', side_effect=ValueError('No saved Calibre EPUB reading position')), \
+                patch.object(bridge, 'load_book'), \
                 patch.object(bridge, 'convert', return_value=([], portable, [])), \
                 patch.object(bridge, '_write_sidecar_resume',
                              return_value=(applied, None if applied else {'pos': 'previous'})) as sidecar:
-            report = bridge.integrate_reader(self.db, 7, {'progress': progress}, **choices)
+            report = bridge._integrate_reader(self.db, 7, {'progress': progress}, **choices)
         return report, sidecar
 
     def test_writes_real_fraction_and_preserves_position_metadata(self):

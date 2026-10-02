@@ -485,14 +485,14 @@ class FrankenDialog(QDialog):
         self.supplemental_sources = []
         self.collection_source = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.3')
+        self.setWindowTitle('NeoMatrix — v1.4.4')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.3</b><br>'
-            'Save and close your books, connect BOOX by USB, then press <b>Sync</b>. '
-            'NeoMatrix saves changed reading data in Calibre and <b>asks before sending newer positions to BOOX.</b> '
-            'Unsupported positions stay unchanged.'
+            '<b>NeoMatrix v1.4.4</b><br>'
+            'Close your books, connect BOOX by USB, then press <b>Sync</b>. '
+            'Sync keeps your farthest reading position when it can match the book. '
+            'You’ll be asked before positions are sent to BOOX.'
         )
         note.setWordWrap(True)
         lay.addWidget(note)
@@ -509,6 +509,7 @@ class FrankenDialog(QDialog):
         self.tools_btn = QPushButton('More…')
         self.tools_btn.setMaximumWidth(140)
         self.tools_menu = QMenu(self)
+        self.tools_menu.addAction('Sync details', self.reader_report)
         self.tools_menu.addAction('Saved reading data', self.browse_archive)
         self.tools_menu.addAction('Free up BOOX storage…', self.storage_cleanup)
         self.tools_menu.addAction('Restore a reading-position backup…', self.restore_reading_position)
@@ -517,7 +518,6 @@ class FrankenDialog(QDialog):
         advanced.addAction('Integrate saved data (all books)', self.integrate_saved)
         advanced.addAction('Use BOOX reading position (selected books)', self.use_boox_position)
         advanced.addAction('Preview reading positions (selected books)', self.push_calibre_position)
-        advanced.addAction('Reader integration report (all books)', self.reader_report)
         advanced.addAction('Export selected book for diagnosis', self.export_reader_diagnosis)
         self.tools_btn.setMenu(self.tools_menu)
         buttons.addWidget(self.tools_btn)
@@ -640,6 +640,10 @@ class FrankenDialog(QDialog):
         except Exception as error:
             self.summary.setText('<b>Sync stopped.</b> Could not compare reading positions: ' + _html(str(error)))
             return
+        pending_ids = {entry[0] for entry in pending}
+        restore_entries = [entry for entry in entries if entry[0] in review.get('pull', ()) and entry[0] not in pending_ids]
+        pending += restore_entries
+        unchanged = max(0, unchanged - len(restore_entries))
         send = False
         if review['plans']:
             from calibre_plugins.frankenboox.push_ui import confirm_sync_pushes
@@ -651,9 +655,8 @@ class FrankenDialog(QDialog):
             resume_issues = self._resume_sync_issues(entries)
             self.summary.setText(
                 f'<b>Sync finished.</b> <b>{unchanged}</b> book archives already up to date; nothing rewritten.' +
-                ('<br><b>Reading positions need attention:</b><br>' + '<br>'.join(_html(x) for x in resume_issues) if resume_issues else '') +
-                ('<br>' + '<br>'.join(_html(issue) for issue in review['issues']) if review['issues'] else '') +
-                ('<br>Newer Calibre positions were kept; nothing sent to BOOX.' if review['plans'] else ''))
+                self._sync_issue_summary(entries, resume_issues + review['issues']) +
+                ('<br>Farther Calibre positions were kept; nothing sent to BOOX.' if review['plans'] else ''))
             return
         done = self.archive(
             skip_confirm=True,
@@ -673,11 +676,11 @@ class FrankenDialog(QDialog):
                 failures.append('Calibre updates had errors; no positions were sent to BOOX.')
             resume_issues = self._resume_sync_issues(entries)
             self.summary.setText(
-                f'<b>Sync finished.</b> Updated <b>{done} book(s)</b> in Calibre; <b>{unchanged}</b> already up to date; '
+                f'<b>Sync finished.</b> Saved BOOX data for <b>{done} book(s)</b>; <b>{unchanged}</b> already up to date; '
                 f'<b>{pushed}</b> position(s) sent to BOOX.' +
-                ('<br><b>Reading positions need attention:</b><br>' + '<br>'.join(_html(x) for x in resume_issues) if resume_issues else '') +
+                self._sync_issue_summary(entries, resume_issues + review['issues'] + failures) +
                 ('<br>Reopen and close the pushed books on BOOX before the next Sync. Backups: ' + _html(str(default_backup_directory())) if pushed else '') +
-                ('<br>' + '<br>'.join(_html(x) for x in review['issues'] + failures) if review['issues'] or failures else '')
+                ''
             )
             if getattr(self, 'collection_warning', None):
                 self.summary.setText(self.summary.text() +
@@ -1235,14 +1238,15 @@ class FrankenDialog(QDialog):
     def reader_report(self):
         from calibre_plugins.frankenboox.reader_bridge import REPORT_KEY
         reports = self.db.get_custom_book_data(REPORT_KEY)
-        lines = []
+        lines = ['Latest sync'] + getattr(self, 'last_sync_issues', []) + ['','Saved reading positions']
         for book_id, report in sorted(reports.items()):
             title = self.db.field_for('title', book_id) or str(book_id)
-            lines.append(f'{title}: {report.get("mapped",0)} annotations mapped; resume mapped: {report.get("resume",False)}; applied: {report.get("resume_applied",False)}')
+            position = 'Updated in Calibre' if report.get('resume_applied') else ('Existing Calibre position kept' if report.get('resume') else 'Reading position could not be synced')
+            lines.append(str(title) + ': ' + position + '; ' + str(report.get('mapped',0)) + ' note(s) imported')
             lines.extend('  '+str(x) for x in report.get('skipped',[]))
-        dlg = QDialog(self); dlg.setWindowTitle('NeoMatrix — reader integration report'); dlg.resize(850,600)
+        dlg = QDialog(self); dlg.setWindowTitle('NeoMatrix — Sync details'); dlg.resize(850,600)
         layout = QVBoxLayout(dlg); text = QTextEdit(); text.setReadOnly(True)
-        text.setPlainText('\n'.join(lines) or 'No reader integration has run yet.')
+        text.setPlainText('\n'.join(lines) or 'No sync has run yet.')
         layout.addWidget(text); close = QPushButton('Close'); close.clicked.connect(dlg.accept); layout.addWidget(close)
         dlg.exec()
 
@@ -1418,6 +1422,18 @@ class FrankenDialog(QDialog):
         except Exception:
             # Missing, corrupt or incomplete saved data is eligible for repair.
             return False
+
+    def _sync_issue_summary(self, entries, issues):
+        self.last_sync_issues = list(dict.fromkeys(str(issue) for issue in issues))
+        if not self.last_sync_issues:
+            return ''
+        affected = set()
+        for book_id, state, _ in entries:
+            title = str(self.db.field_for('title', book_id) or (state.get('boox_book') or {}).get('title') or 'Book ' + str(book_id))
+            if any(issue.startswith(title + ':') for issue in self.last_sync_issues):
+                affected.add(book_id)
+        label = (str(len(affected)) + (' book needs attention.' if len(affected) == 1 else ' books need attention.')) if affected else 'Sync needs attention.'
+        return '<br><b>' + label + '</b> See More… → Sync details.'
 
     def _resume_sync_issues(self, entries):
         """Surface unresolved saved positions even when source data is unchanged."""
