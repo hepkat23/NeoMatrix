@@ -32,12 +32,13 @@ integration = load('integration')
 reader = ModuleType('calibre_plugins.frankenboox.reader_bridge')
 reader.ANCHOR_KEY = 'neomatrix_portable_anchors_v1'
 reader.REPORT_KEY = 'neomatrix_reader_report_v1'
+reader.READER_MAPPING_VERSION = 2
 sys.modules[reader.__name__] = reader
 
 tree = ast.parse((ROOT / 'main.py').read_text())
 dialog = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'FrankenDialog')
 method_names = ('sync_direct', '_archive_payload', '_reader_sync_complete', '_archive_is_current',
-                '_pending_archive_entries', '_archive_files_to_write', 'archive',
+                '_pending_archive_entries', '_resume_sync_issues', '_archive_files_to_write', 'archive',
                 '_archived_state_for_book', '_annotations_for', '_bookmarks_for', '_stats_for',
                 '_readernote_for', '_points_for', '_best_fallback', '_carry_forward_unchanged_handwriting')
 definitions = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
@@ -143,7 +144,7 @@ class Harness:
         if db.format_abspath(book, 'EPUB'):
             digest = hashlib.sha256(Path(db.epubs[book]).read_bytes()).hexdigest()
             db.add_custom_book_data(reader.ANCHOR_KEY, {book: {'epub_sha256': digest}}, delete_first=False)
-            report = {'mapped': 0, 'resume': False, 'skipped': []}
+            report = {'mapping_version':reader.READER_MAPPING_VERSION, 'mapped': 0, 'resume': False, 'skipped': []}
         else:
             report = {'mapped': 0, 'resume': False, 'skipped': ['Native reader integration currently supports EPUB only']}
         db.add_custom_book_data(reader.REPORT_KEY, {book: report}, delete_first=False)
@@ -187,7 +188,7 @@ class IncrementalSyncTests(unittest.TestCase):
             self.ui.sync_direct()
             self.assertEqual(self.db.events, [])
             self.assertEqual(self.ui.choices, [])
-            self.assertIn('2</b> books already up to date', self.ui.summary_text)
+            self.assertIn('2</b> book archives already up to date', self.ui.summary_text)
             self.assertEqual(before, {p: (p.stat().st_mtime_ns, p.read_bytes()) for p in before})
 
     def test_duplicate_source_changes_preserve_other_source_data(self):
@@ -308,12 +309,49 @@ class IncrementalSyncTests(unittest.TestCase):
         self.assertEqual(self.db.events, [])
         self.assertIn('Sync stopped safely', self.ui.summary_text)
 
+    def test_unchanged_epub_is_rechecked_once_after_mapper_update(self):
+        epub = Path(self.temp.name) / 'book.epub'
+        epub.write_bytes(b'unchanged EPUB bytes')
+        self.db.epubs[1] = str(epub)
+        self.ui.sync_direct()
+        report = self.db.data[reader.REPORT_KEY][1]
+        report.pop('mapping_version')  # Archive saved before mapper revisions existed.
+        self.db.events.clear()
+        self.ui.sync_direct()
+        self.assertEqual(sum(e[0] == 'reader' for e in self.db.events), 1)
+        self.assertEqual({e[1] for e in self.db.events}, {1})
+        self.assertEqual(self.db.data[reader.REPORT_KEY][1]['mapping_version'], 2)
+        self.db.events.clear()
+        self.ui.sync_direct()
+        self.assertEqual(self.db.events, [])
+        self.db.data[reader.REPORT_KEY][1]['mapping_version'] = 1
+        self.ui.sync_direct()
+        self.assertEqual(sum(e[0] == 'reader' for e in self.db.events), 1)
+
+    def test_unmapped_resume_warning_persists_without_rewriting_book(self):
+        epub = Path(self.temp.name) / 'book.epub'
+        epub.write_bytes(b'unchanged EPUB bytes')
+        self.db.epubs[1] = str(epub)
+        row = self.ui.matches['1' * 32]['boox']
+        extra = json.loads(row['extraAttributes'])
+        extra['backend']['current_page_position_v3'] = {'chapterID':'chapter', 'nodePosition':123, 'textOffset':4}
+        row['extraAttributes'] = json.dumps(extra)
+        self.ui.sync_direct()
+        self.db.events.clear()
+        self.ui.sync_direct()
+        self.assertEqual(self.db.events, [])
+        self.assertIn('BOOX reading position is unverified', self.ui.summary_text)
+        self.assertIn('Reader handoff may use an older position', self.ui.summary_text)
+        self.db.data[reader.REPORT_KEY][1]['resume'] = True
+        self.ui.sync_direct()
+        self.assertNotIn('BOOX reading position is unverified', self.ui.summary_text)
+
     def test_repeat_sync_has_zero_writes_and_does_not_prompt(self):
         before = {p: (p.stat().st_mtime_ns, p.read_bytes()) for p in self.db.root.rglob('*') if p.is_file()}
         self.ui.sync_direct()
         self.assertEqual(self.db.events, [])
         self.assertEqual(self.ui.choices, [])
-        self.assertIn('2</b> books already up to date', self.ui.summary_text)
+        self.assertIn('2</b> book archives already up to date', self.ui.summary_text)
         self.assertEqual(before, {p: (p.stat().st_mtime_ns, p.read_bytes()) for p in before})
 
     def test_only_changed_book_and_column_are_written(self):

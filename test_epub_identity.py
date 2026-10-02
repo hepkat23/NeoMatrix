@@ -251,7 +251,8 @@ class IncrementalArchiveTests(unittest.TestCase):
                 db = types.SimpleNamespace(field_for=lambda key, bid: values[key[1:]], list_extra_files=lambda *a, **kw: [], format_abspath=lambda *a: str(book))
                 owner = types.SimpleNamespace(db=db, _archived_state_for_book=lambda bid: (state, None), _reader_sync_complete=lambda report: True)
                 status = {'complete': True, 'signature': sync_state.state_signature(state)}
-                args = (owner, 1, state, {}, state, {}, anchors, status)
+                from reader_bridge import READER_MAPPING_VERSION
+                args = (owner, 1, state, {}, state, {'mapping_version': READER_MAPPING_VERSION}, anchors, status)
                 self.assertTrue(check(*args))
                 edited = members()
                 edited['META-INF/calibre_bookmarks.txt'] = b'viewer position changed'

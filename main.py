@@ -485,11 +485,11 @@ class FrankenDialog(QDialog):
         self.supplemental_sources = []
         self.collection_source = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.2')
+        self.setWindowTitle('NeoMatrix — v1.4.3')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.2</b><br>'
+            '<b>NeoMatrix v1.4.3</b><br>'
             'Save and close your books, connect BOOX by USB, then press <b>Sync</b>. '
             'NeoMatrix saves changed reading data in Calibre and <b>asks before sending newer positions to BOOX.</b> '
             'Unsupported positions stay unchanged.'
@@ -648,8 +648,10 @@ class FrankenDialog(QDialog):
                 self.summary.setText('<b>Sync cancelled.</b> Nothing was changed in Calibre or BOOX.')
                 return
         if not pending and not send:
+            resume_issues = self._resume_sync_issues(entries)
             self.summary.setText(
-                f'<b>Sync finished.</b> <b>{unchanged}</b> books already up to date; nothing rewritten.' +
+                f'<b>Sync finished.</b> <b>{unchanged}</b> book archives already up to date; nothing rewritten.' +
+                ('<br><b>Reading positions need attention:</b><br>' + '<br>'.join(_html(x) for x in resume_issues) if resume_issues else '') +
                 ('<br>' + '<br>'.join(_html(issue) for issue in review['issues']) if review['issues'] else '') +
                 ('<br>Newer Calibre positions were kept; nothing sent to BOOX.' if review['plans'] else ''))
             return
@@ -669,9 +671,11 @@ class FrankenDialog(QDialog):
             failures = [x['title'] + ': ' + x['reason'] for x in outcomes if x['status'] == 'failed']
             if send and getattr(self, 'integration_errors', 0):
                 failures.append('Calibre updates had errors; no positions were sent to BOOX.')
+            resume_issues = self._resume_sync_issues(entries)
             self.summary.setText(
                 f'<b>Sync finished.</b> Updated <b>{done} book(s)</b> in Calibre; <b>{unchanged}</b> already up to date; '
                 f'<b>{pushed}</b> position(s) sent to BOOX.' +
+                ('<br><b>Reading positions need attention:</b><br>' + '<br>'.join(_html(x) for x in resume_issues) if resume_issues else '') +
                 ('<br>Reopen and close the pushed books on BOOX before the next Sync. Backups: ' + _html(str(default_backup_directory())) if pushed else '') +
                 ('<br>' + '<br>'.join(_html(x) for x in review['issues'] + failures) if review['issues'] or failures else '')
             )
@@ -1391,6 +1395,9 @@ class FrankenDialog(QDialog):
                     return False
             epub = self.db.format_abspath(book_id, 'EPUB')
             if epub:
+                from calibre_plugins.frankenboox.reader_bridge import READER_MAPPING_VERSION
+                if report.get('mapping_version') != READER_MAPPING_VERSION:
+                    return False
                 if not isinstance(anchors, dict):
                     return False
                 from calibre_plugins.frankenboox.epub_identity import reading_digest, IDENTITY_SCHEMA
@@ -1411,6 +1418,22 @@ class FrankenDialog(QDialog):
         except Exception:
             # Missing, corrupt or incomplete saved data is eligible for repair.
             return False
+
+    def _resume_sync_issues(self, entries):
+        """Surface unresolved saved positions even when source data is unchanged."""
+        from calibre_plugins.frankenboox.reader_bridge import REPORT_KEY
+        reports = self.db.get_custom_book_data(REPORT_KEY)
+        issues = []
+        for book_id, state, _ in entries:
+            report = reports.get(book_id) or {}
+            if not state_resume_candidate(state) or report.get('resume'):
+                continue
+            title = self.db.field_for('title', book_id) or (state.get('boox_book') or {}).get('title') or 'Book ' + str(book_id)
+            if not self.db.format_abspath(book_id, 'EPUB'):
+                issues.append(str(title) + ': reading-position conversion supports EPUB only.')
+            else:
+                issues.append(str(title) + ': BOOX reading position is unverified; Calibre position was kept. Reader handoff may use an older position.')
+        return issues
 
     def _pending_archive_entries(self):
         from calibre_plugins.frankenboox.integration import DATA_KEY

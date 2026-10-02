@@ -1,4 +1,4 @@
-NeoMatrix 1.4.2 — BOOX reading data in Calibre
+NeoMatrix 1.4.3 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -86,3 +86,8 @@ backups, conditional updates, restore guards, and the main Sync choices.
 
 NeoMatrix is an independent compatibility tool. No BOOX firmware, third-party
 books or device-private diagnostics are distributed with it.
+
+MAPPING UPDATES
+After a reading-position mapper update, Sync rechecks existing EPUB archives
+once even when BOOX data has not changed. Remaining unsupported positions are
+listed in the sync summary, including on repeat syncs. No page turn is needed.

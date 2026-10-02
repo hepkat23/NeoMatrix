@@ -11,6 +11,8 @@ from datetime import datetime, timezone, timedelta
 
 ANCHOR_KEY = 'neomatrix_portable_anchors_v1'
 REPORT_KEY = 'neomatrix_reader_report_v1'
+# Bump when conversion rules change so unchanged EPUBs are reintegrated once.
+READER_MAPPING_VERSION = 2
 NS = uuid.UUID('61885b90-e112-4d2f-aa1e-3476976da5e4')
 try:
     from calibre_plugins.frankenboox.epub_identity import reading_digest, IDENTITY_SCHEMA
@@ -554,7 +556,7 @@ def integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_posi
         skipped.append('Existing Calibre position was kept by the sync choice. Use Tools → Use BOOX reading position to apply the BOOX position explicitly.')
     elif portable['resume'] and resume_retained:
         skipped.append('A newer Calibre position was retained. Use Tools → Use BOOX reading position to apply the BOOX position explicitly.')
-    report = {'mapped':len(portable['annotations']), 'resume':bool(portable['resume']),
+    report = {'mapping_version':READER_MAPPING_VERSION, 'mapped':len(portable['annotations']), 'resume':bool(portable['resume']),
               'resume_applied':resume_applied, 'skipped':skipped}
     db.add_custom_book_data(ANCHOR_KEY,{book_id:portable},delete_first=False)
     db.add_custom_book_data(REPORT_KEY,{book_id:report},delete_first=False)
