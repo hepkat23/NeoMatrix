@@ -130,6 +130,25 @@ class CleanupTests(unittest.TestCase):
         self.device.states['/storage/card/Books/gone.epub'] = 'P'
         self.assertFalse(any(x.eligible for x in c.scan_device(self.device).candidates))
 
+    def test_finished_shelved_book_preserves_notes_and_remains_current(self):
+        self.device.rows[0].update(readingStatus='2', progress='100/100', shelf='Finished')
+        self.device.states['/storage/card/Books/gone.epub'] = 'P'
+        original = copy.deepcopy(self.device.data)
+        scan = c.scan_device(self.device)
+        self.assertEqual(scan.book_records[0].state, 'P')
+        self.assertFalse(any(candidate.eligible for candidate in scan.candidates))
+        self.assertEqual(self.device.data, original)
+        self.assertEqual(self.device.actions, [])
+
+    def test_old_path_reports_possible_moved_copy_and_protects_its_notes(self):
+        current = '/storage/card/Finished/gone.epub'
+        self.device.catalogue_files = [c.DeviceFile(current, 20000, 0)]
+        scan = c.scan_device(self.device)
+        self.assertEqual(scan.book_records[0].state, 'C')
+        self.assertEqual(scan.book_records[0].related_paths, (current,))
+        self.assertFalse(any(candidate.eligible for candidate in scan.candidates))
+        self.assertEqual(self.device.actions, [])
+
     def test_unknown_storage_permissions_or_identity_protects_data(self):
         self.device.states.clear()
         self.device.data[UNKNOWN + '/stroke'] = b'unidentified'

@@ -2,9 +2,10 @@
 from pathlib import Path
 from qt.core import (QAbstractItemView, QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
                      QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
-                     QVBoxLayout, Qt)
+                     QVBoxLayout, QTabWidget, QWidget, Qt)
 from calibre_plugins.frankenboox.background import run_background
 from calibre_plugins.frankenboox.storage_cleanup import AdbDevice, clean, restore, scan_device, verify_backup
+from calibre_plugins.frankenboox.boox_files import record_token
 
 
 def size_text(size):
@@ -18,35 +19,63 @@ def size_text(size):
 
 
 class CleanupDialog(QDialog):
-    def __init__(self, parent, adb):
+    def __init__(self, parent, adb, settings=None):
         super().__init__(parent)
         self.adb = adb
+        self.settings = settings
         self.device = None
         self.scan = None
         self.visible_candidates = []
+        self.visible_records = []
         self._sync_busy = False
-        self.setWindowTitle('NeoMatrix — BOOX storage cleanup')
+        self.setWindowTitle('NeoMatrix — BOOX cleanup')
         self.resize(1060, 650)
         layout = QVBoxLayout(self)
-        note = QLabel('Scan checks NeoReader handwriting and page caches against book files on internal memory and storage cards. '
-                      'Books still on the device, unknown data and Kindle downloads are protected. '
-                      'Removal first saves a verified backup on your computer. Shared BOOX databases are retained.')
+        note = QLabel('Scan finds old book records and unused reader files. '
+                      'Book records can be excluded from sync while keeping their history. '
+                      'Removing unused files saves a backup first.')
         note.setWordWrap(True)
         layout.addWidget(note)
         buttons = QHBoxLayout()
-        self.scan_btn = QPushButton('Scan BOOX storage')
+        self.scan_btn = QPushButton('Scan BOOX')
+        self.exclude_btn = QPushButton('Exclude selected from sync')
+        self.include_btn = QPushButton('Include selected again')
         self.remove_btn = QPushButton('Back up and remove selected…')
         self.restore_btn = QPushButton('Restore a cleanup backup…')
         self.remove_btn.setEnabled(False)
+        self.exclude_btn.setEnabled(False)
+        self.include_btn.setEnabled(False)
         self.scan_btn.clicked.connect(self.refresh)
+        self.exclude_btn.clicked.connect(lambda: self.set_record_exclusions(True))
+        self.include_btn.clicked.connect(lambda: self.set_record_exclusions(False))
         self.remove_btn.clicked.connect(self.remove_selected)
         self.restore_btn.clicked.connect(self.restore_backup)
-        for button in (self.scan_btn, self.remove_btn, self.restore_btn):
+        for button in (self.scan_btn, self.exclude_btn, self.include_btn, self.remove_btn, self.restore_btn):
             buttons.addWidget(button)
         layout.addLayout(buttons)
+        self.tabs = QTabWidget()
+        records_page = QWidget(); records_layout = QVBoxLayout(records_page)
+        self.show_current = QCheckBox('Show current books too')
+        self.show_current.toggled.connect(lambda checked: self.populate_records() if self.scan else None)
+        records_layout.addWidget(self.show_current)
+        self.records_table = QTableWidget(0, 4)
+        self.records_table.setHorizontalHeaderLabels(['Select', 'Book', 'Status', 'File locations'])
+        self.records_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.records_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.records_table.setColumnWidth(0, 55)
+        self.records_table.setColumnWidth(1, 260)
+        self.records_table.setColumnWidth(2, 250)
+        self.records_table.horizontalHeader().setStretchLastSection(True)
+        self.records_table.itemChanged.connect(self.update_record_selection)
+        records_layout.addWidget(self.records_table)
+        self.records_summary = QLabel('Scan checks the saved book locations. Exclusions can be undone here.')
+        self.records_summary.setWordWrap(True)
+        records_layout.addWidget(self.records_summary)
+        self.tabs.addTab(records_page, 'Book records')
+        files_page = QWidget(); files_layout = QVBoxLayout(files_page)
         self.show_protected = QCheckBox('Show protected entries')
         self.show_protected.toggled.connect(lambda checked: self.populate() if self.scan else None)
-        layout.addWidget(self.show_protected)
+        files_layout.addWidget(self.show_protected)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(['Select', 'Book / download', 'Data', 'Size', 'Status'])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -57,13 +86,86 @@ class CleanupDialog(QDialog):
         self.table.setColumnWidth(3, 85)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemChanged.connect(self.update_selection)
-        layout.addWidget(self.table)
+        files_layout.addWidget(self.table)
         self.summary = QLabel('Scan reads the device without changing any files.')
         self.summary.setWordWrap(True)
-        layout.addWidget(self.summary)
+        files_layout.addWidget(self.summary)
+        self.tabs.addTab(files_page, 'Unused files')
+        self.tabs.currentChanged.connect(self.update_actions)
+        layout.addWidget(self.tabs)
+        self.update_actions()
         close = QPushButton('Close')
         close.clicked.connect(self.accept)
         layout.addWidget(close)
+
+    def update_actions(self, *args):
+        records = self.tabs.currentIndex() == 0
+        self.exclude_btn.setVisible(records)
+        self.include_btn.setVisible(records)
+        self.remove_btn.setVisible(not records)
+        self.restore_btn.setVisible(not records)
+
+    def excluded_tokens(self):
+        if not self.scan or self.settings is None:
+            return set()
+        return set((self.settings.get('excluded_book_records') or {}).get(self.scan.serial, ()))
+
+    def selected_record_tokens(self):
+        return {token for index, (_, _, token) in enumerate(self.visible_records)
+                if token and self.records_table.item(index, 0).checkState() == Qt.CheckState.Checked}
+
+    def update_record_selection(self, *args):
+        selected = self.selected_record_tokens(); excluded = self.excluded_tokens()
+        self.exclude_btn.setEnabled(self.settings is not None and bool(selected - excluded))
+        self.include_btn.setEnabled(self.settings is not None and bool(selected & excluded))
+
+    def set_record_exclusions(self, exclude):
+        if self.settings is None or not self.scan:
+            return
+        selected = self.selected_record_tokens()
+        if not selected:
+            return
+        excluded = self.excluded_tokens()
+        current = {record_token(self.scan.serial, row) for row in self.scan.metadata}
+        excluded.intersection_update(current)
+        excluded.update(selected) if exclude else excluded.difference_update(selected)
+        settings = dict(self.settings.get('excluded_book_records') or {})
+        settings[self.scan.serial] = sorted(excluded)
+        self.settings['excluded_book_records'] = settings
+        self.populate_records()
+
+    def populate_records(self):
+        excluded = self.excluded_tokens()
+        records = list(zip(self.scan.book_records, self.scan.metadata))
+        self.visible_records = [(record, row, record_token(self.scan.serial, row)) for record, row in records
+                                if record.state != 'P' or self.show_current.isChecked()
+                                or record_token(self.scan.serial, row) in excluded]
+        self.records_table.blockSignals(True)
+        try:
+            self.records_table.setRowCount(len(self.visible_records))
+            for index, (record, row, token) in enumerate(self.visible_records):
+                check = QTableWidgetItem('')
+                flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                if token and self.settings is not None:
+                    flags |= Qt.ItemFlag.ItemIsUserCheckable
+                    check.setCheckState(Qt.CheckState.Unchecked)
+                check.setFlags(flags); self.records_table.setItem(index, 0, check)
+                status = 'Excluded from sync; history kept' if token in excluded else record.status
+                paths = ['Saved: ' + path for path in record.paths]
+                paths += ['Possible copy: ' + path for path in record.related_paths]
+                location = '\n'.join(paths) or 'No saved file path'
+                for col, value in enumerate((record.title, status, location), 1):
+                    item = QTableWidgetItem(value); item.setToolTip(location)
+                    self.records_table.setItem(index, col, item)
+                self.records_table.setRowHeight(index, 62 if record.related_paths else 46)
+        finally:
+            self.records_table.blockSignals(False)
+        old = sum(record.state in ('M', 'C') for record, row in records)
+        uncertain = sum(record.state == 'U' for record, row in records)
+        ignored = sum(record_token(self.scan.serial, row) in excluded for record, row in records)
+        self.records_summary.setText('%d old location(s); %d could not be checked; %d excluded from sync. '
+                                     'History is kept. Changed records return to sync automatically.' % (old, uncertain, ignored))
+        self.update_record_selection()
 
     def accept(self):
         if not self._sync_busy:
@@ -92,15 +194,20 @@ class CleanupDialog(QDialog):
         self.remove_btn.setEnabled(False)
         self.scan = None
         self.visible_candidates = []
+        self.visible_records = []
         self.table.setRowCount(0)
+        self.records_table.setRowCount(0)
+        self.exclude_btn.setEnabled(False); self.include_btn.setEnabled(False)
         try:
             def task(status):
                 device = AdbDevice(self.adb)
                 return device, scan_device(device, status)
             self.device, self.scan = run_background(self, 'Scanning BOOX storage…', task)
             self.populate()
+            self.populate_records()
         except Exception as error:
             self.summary.setText('Scan could not complete. No files were changed.')
+            self.records_summary.setText('Scan could not complete. No exclusions were changed.')
             QMessageBox.warning(self, 'BOOX storage scan', str(error))
 
     def populate(self):

@@ -1,4 +1,4 @@
-NeoMatrix 1.4.5 — BOOX reading data in Calibre
+NeoMatrix 1.4.6 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -53,10 +53,17 @@ no rooting, firmware modification or proprietary source code is required.
 
 MORE
 Saved reading data: browse local reading and handwriting archives.
-Free up BOOX storage: optional review of verified orphaned reader files. Scan
-makes no changes. Removal requires a separate choice and a verified backup.
+BOOX cleanup: Book records shows current files, old locations and possible moved
+or replacement copies. Selected records can be excluded from sync and included
+again. Exclusions are local to this computer and the exact unchanged record on
+that BOOX. Reading again, moving or replacing a record makes it eligible again.
+Finishing a book or organizing it on a shelf never automatically excludes it.
+Unused files reviews verified orphaned reader files. Scan makes no changes.
+Removal requires a separate choice and a verified backup.
 Books still present on internal memory/SD cards, Kindle CR! downloads, tiny caches,
 shared databases and uncertain data are protected. Cleanup does not run in Sync.
+Sync skips confirmed missing paths while keeping saved history, reports incomplete
+file checks, and separates current books from archives in Sync details.
 Restore a reading-position backup: restores the old position only on the same
 BOOX and exact book, provided there has been no newer reading since the push.
 Advanced: manual imports, position overrides, reports and local diagnosis export.

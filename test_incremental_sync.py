@@ -38,8 +38,8 @@ sys.modules[reader.__name__] = reader
 
 tree = ast.parse((ROOT / 'main.py').read_text())
 dialog = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'FrankenDialog')
-method_names = ('sync_direct', '_archive_payload', '_reader_sync_complete', '_archive_is_current',
-                '_pending_archive_entries', '_sync_issue_summary', '_resume_sync_issues', '_archive_files_to_write', 'archive',
+method_names = ('sync_direct', 'collect_direct', '_archive_payload', '_reader_sync_complete', '_archive_is_current',
+                '_pending_archive_entries', '_sync_issue_summary', '_book_file_summary', '_resume_sync_issues', '_archive_files_to_write', 'archive',
                 '_archived_state_for_book', '_annotations_for', '_bookmarks_for', '_stats_for',
                 '_readernote_for', '_points_for', '_best_fallback', '_carry_forward_unchanged_handwriting')
 definitions = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
@@ -52,7 +52,8 @@ environment = dict(globals(), state_signature=signature_module.state_signature, 
 environment['run_background'] = lambda parent, title, work: work(lambda status: None)
 messages = []
 environment['QMessageBox'] = SimpleNamespace(
-    warning=lambda *args: messages.append(args), information=lambda *args: messages.append(args))
+    warning=lambda *args: messages.append(args), information=lambda *args: messages.append(args),
+    critical=lambda *args: messages.append(args))
 exec(compile(ast.Module(body=definitions, type_ignores=[]), str(ROOT / 'main.py'), 'exec'), environment)
 
 
@@ -153,6 +154,37 @@ class Harness:
 
 
 class IncrementalSyncTests(unittest.TestCase):
+    def test_failed_new_collection_disables_the_previous_snapshot(self):
+        actual_collect = environment['collect_direct']
+        saved = copy.deepcopy(self.db.data)
+        self.ui.collection_source = 'direct-adb'
+        self.ui.archive_btn.setEnabled(True)
+        def disconnected(*args, **kwargs):
+            raise OSError('BOOX disconnected')
+        with patch.dict(environment, {
+                'find_adb': lambda: '/fake/adb',
+                'ApprovalDialog': lambda *args: SimpleNamespace(exec=lambda: 1),
+                'QDialog': SimpleNamespace(DialogCode=SimpleNamespace(Accepted=1)),
+                'adb_text': disconnected}):
+            actual_collect(self.ui)
+        self.assertIsNone(self.ui.collection_source)
+        self.assertFalse(self.ui.archive_btn.isEnabled())
+        self.assertEqual(self.db.events, [])
+        self.assertEqual(self.db.data, saved)
+
+    def test_cancelled_new_collection_disables_the_previous_snapshot(self):
+        actual_collect = environment['collect_direct']
+        self.ui.collection_source = 'direct-adb'
+        self.ui.archive_btn.setEnabled(True)
+        with patch.dict(environment, {
+                'find_adb': lambda: '/fake/adb',
+                'ApprovalDialog': lambda *args: SimpleNamespace(exec=lambda: 0),
+                'QDialog': SimpleNamespace(DialogCode=SimpleNamespace(Accepted=1))}):
+            actual_collect(self.ui)
+        self.assertIsNone(self.ui.collection_source)
+        self.assertFalse(self.ui.archive_btn.isEnabled())
+        self.assertEqual(self.db.events, [])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.db = FakeDB(Path(self.temp.name))

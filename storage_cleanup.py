@@ -3,7 +3,7 @@
 Normal Sync never invokes this module. Shared databases, ebooks, Kindle data,
 unknown identities and records whose storage cannot be checked are protected.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -62,6 +62,16 @@ class Scan:
     candidates: list
     warnings: list
     metadata: list
+    book_records: list = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class BookRecord:
+    title: str
+    paths: tuple
+    state: str
+    status: str
+    related_paths: tuple = ()
 
 
 def digest_file(path):
@@ -179,39 +189,49 @@ def covered_path(path, catalogue):
     return any(path.startswith(root + '/') for root in catalogue.roots)
 
 
-def book_status(row, device, catalogue):
+def inspect_book_record(row, device, catalogue):
     paths = source_paths(row)
+    title = row.get('title') or row.get('name') or 'Untitled book'
+    def result(state, related=()):
+        labels = {'P': 'On BOOX', 'C': 'Old location; possible copy elsewhere',
+                  'M': 'Book missing; history kept', 'U': 'Could not check; history kept'}
+        return BookRecord(title, tuple(paths), state, labels[state], tuple(sorted(set(related))))
     if not paths:
-        return 'U'
+        return result('U')
     direct = device.book_status(paths)
     if direct != 'M':
-        return direct
+        return result(direct if direct in ('P', 'U') else 'U')
     # Absence at a recorded path is not absence from the device. Renamed files
     # with identical bytes and potential replacement editions protect old notes.
-    if any(possible_copy(row, f.path) for f in catalogue.files):
-        return 'C'
+    copies = [f.path for f in catalogue.files if possible_copy(row, f.path)]
+    if copies:
+        return result('C', copies)
     if not catalogue.complete or not all(covered_path(p, catalogue) for p in paths):
-        return 'U'
+        return result('U')
     hashes = identities(row, 'md5')
     try:
         size = int(row.get('size') or 0)
     except (ValueError, TypeError):
         size = 0
     if not hashes or size <= 0:
-        return 'U'
+        return result('U')
     for file in catalogue.files:
         if file.size == size:
             # Permission, disconnection or checksum failures must block cleanup.
             if device.ebook_md5(file.path) in hashes:
-                return 'C'
-    return 'M'
+                return result('C', (file.path,))
+    return result('M')
+
+
+def book_status(row, device, catalogue):
+    return inspect_book_record(row, device, catalogue).state
 
 
 def scan_device(device, status=lambda text: None, include_kindle=True):
     device.ensure_connected()
     status('Checking book files on the BOOX…')
     rows = device.metadata()
-    states = []
+    records = []
     warnings = []
     try:
         catalogue = device.book_catalogue(status)
@@ -220,15 +240,22 @@ def scan_device(device, status=lambda text: None, include_kindle=True):
         warnings.append('Book locations could not all be checked; uncertain data is protected. ' + str(error))
     for row in rows:
         try:
-            states.append(book_status(row, device, catalogue))
+            records.append(inspect_book_record(row, device, catalogue))
         except Exception:
-            states.append('U')
+            records.append(BookRecord(row.get('title') or row.get('name') or 'Untitled book',
+                                      tuple(source_paths(row)), 'U', 'Could not check; history kept'))
+    states = [record.state for record in records]
     # A current replacement/copy in another NeoReader record also protects old
     # document data. Explicit different volumes are not treated as copies.
     for index, row in enumerate(rows):
         if states[index] == 'M' and any(states[j] in ('P', 'C') and same_book_record(row, other)
                                         for j, other in enumerate(rows) if j != index):
             states[index] = 'C'
+            related = [path for j, other in enumerate(rows) if j != index
+                       and states[j] in ('P', 'C') and same_book_record(row, other)
+                       for path in source_paths(other)]
+            records[index] = replace(records[index], state='C', status='Old location; related copy found',
+                                     related_paths=tuple(sorted(set(related))))
     result = []
     for root, (label, identity_kind) in ROOTS.items():
         status('Checking ' + label.lower() + '…')
@@ -286,7 +313,7 @@ def scan_device(device, status=lambda text: None, include_kindle=True):
         except Exception:
             warnings.append('Kindle downloads could not all be inspected; they are always protected.')
     result.sort(key=lambda c: (not c.eligible, c.title.casefold(), c.kind, c.path))
-    return Scan(device.serial, result, warnings, rows)
+    return Scan(device.serial, result, warnings, rows, records)
 
 
 def verify_backup(path):

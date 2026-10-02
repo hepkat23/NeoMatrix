@@ -24,7 +24,7 @@ from calibre.utils.config import JSONConfig
 from calibre_plugins.frankenboox.integration import ensure_columns, integrate_with_reader as integrate, RestartRequired
 from calibre_plugins.frankenboox.sync_state import state_signature, combine_book_entries, volume_identity
 
-from calibre_plugins.frankenboox.boox_files import retain_existing_books
+from calibre_plugins.frankenboox.boox_files import check_book_files, exclude_saved_records
 
 SYNC_KEY = 'neomatrix_sync_status_v1'
 from calibre_plugins.frankenboox.approval import ApprovalDialog
@@ -32,6 +32,7 @@ from calibre_plugins.frankenboox.background import run_background
 
 prefs = JSONConfig('plugins/frankenboox_sync')
 prefs.defaults['manual_matches'] = {}
+prefs.defaults['excluded_book_records'] = {}
 
 KEY_RE = re.compile(r', (?=[A-Za-z_][A-Za-z0-9_]*=)')
 UUID_RE = re.compile(rb'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
@@ -484,12 +485,15 @@ class FrankenDialog(QDialog):
         self.source_zip = None
         self.supplemental_sources = []
         self.collection_source = None
+        self.book_file_check = None
+        self.excluded_book_rows = []
+        self.collection_serial = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.5')
+        self.setWindowTitle('NeoMatrix — v1.4.6')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.5</b><br>'
+            '<b>NeoMatrix v1.4.6</b><br>'
             'Close your books, connect BOOX by USB, then press <b>Sync</b>. '
             'Sync keeps your farthest reading position when it can match the book. '
             'You’ll be asked before positions are sent to BOOX.'
@@ -511,7 +515,7 @@ class FrankenDialog(QDialog):
         self.tools_menu = QMenu(self)
         self.tools_menu.addAction('Sync details', self.reader_report)
         self.tools_menu.addAction('Saved reading data', self.browse_archive)
-        self.tools_menu.addAction('Free up BOOX storage…', self.storage_cleanup)
+        self.tools_menu.addAction('BOOX cleanup…', self.storage_cleanup)
         self.tools_menu.addAction('Restore a reading-position backup…', self.restore_reading_position)
         self.tools_menu.addSeparator()
         advanced = self.tools_menu.addMenu('Advanced')
@@ -563,7 +567,7 @@ class FrankenDialog(QDialog):
                                 'Android Platform Tools (ADB) was not found. Install it and add adb to your system path.')
             return
         from calibre_plugins.frankenboox.cleanup_ui import CleanupDialog
-        CleanupDialog(self, adb).exec()
+        CleanupDialog(self, adb, settings=prefs).exec()
 
     def sync_direct(self):
         """Normal-user workflow: collect safely, then archive automatically.
@@ -687,6 +691,11 @@ class FrankenDialog(QDialog):
                     ' Fresh handwriting metadata was unavailable; only validated preserved handwriting was used.')
 
     def collect_direct(self):
+        # A failed or cancelled read must not reuse a previous collection.
+        self.archive_btn.setEnabled(False)
+        self.collection_source = None
+        self.book_file_check, self.excluded_book_rows, self.collection_serial = None, [], None
+        self.last_sync_issues = []
         adb = find_adb()
         if not adb:
             QMessageBox.critical(self, 'NeoMatrix',
@@ -697,6 +706,9 @@ class FrankenDialog(QDialog):
             if ApprovalDialog(self, adb).exec() != QDialog.DialogCode.Accepted:
                 return
             def collect(status):
+                serial = adb_text(adb, 'get-serialno', timeout=20).strip()
+                if not serial or serial == 'unknown':
+                    raise RuntimeError('The connected BOOX could not be identified.')
                 rows = []
                 for label, uri in (
                     ('Reading BOOX library…', 'content://com.onyx.content.database.ContentProvider/Metadata'),
@@ -709,8 +721,11 @@ class FrankenDialog(QDialog):
                 if not rows[0]:
                     raise RuntimeError('NeoReader Metadata returned no rows.')
                 status('Checking current BOOX book files…')
-                rows[0], _ = retain_existing_books(
-                    rows[0], lambda command: adb_text(adb, 'shell', command, timeout=90))
+                eligible, excluded = exclude_saved_records(
+                    rows[0], serial, (prefs['excluded_book_records'] or {}).get(serial, ()))
+                file_check = check_book_files(
+                    eligible, lambda command: adb_text(adb, 'shell', command, timeout=90))
+                rows[0] = file_check.kept
                 status('Reading handwriting files…')
                 points = pull_point_files(adb, [boox_doc_id(r) for r in rows[0] if boox_doc_id(r)])
                 status('Reading handwriting metadata. If BOOX asks, approve the backup with the password blank.')
@@ -719,13 +734,16 @@ class FrankenDialog(QDialog):
                     error = None
                 except Exception as e:
                     dbs, error = {}, str(e)
-                return rows, points, dbs, error
+                if adb_text(adb, 'get-serialno', timeout=20).strip() != serial:
+                    raise RuntimeError('The connected device changed; collect BOOX data again.')
+                return rows, points, dbs, error, serial, file_check, excluded
 
-            rows, points, dbs, rn_error = run_background(self, 'Reading BOOX data…', collect)
+            rows, points, dbs, rn_error, serial, file_check, excluded = run_background(self, 'Reading BOOX data…', collect)
             self.boox_rows, self.stats_rows, self.annotation_rows, self.bookmark_rows = rows
             self.point_files, self.readernote_dbs, self.matches = points, dbs, {}
             self.collection_warning = rn_error
             self.collection_source = 'direct-adb'
+            self.book_file_check, self.excluded_book_rows, self.collection_serial = file_check, excluded, serial
             self.source_zip = None
             self.supplemental_sources = ['direct BOOX collection']
             self._match_books()
@@ -733,8 +751,10 @@ class FrankenDialog(QDialog):
             if carried:
                 self.supplemental_sources.append(f'{carried} unchanged handwriting archive fallback(s)')
             self._populate_table()
+            self.summary.setText(self.summary.text() + self._book_file_summary())
             self.archive_btn.setEnabled(any(v.get('book_id') is not None for v in self.matches.values()))
         except Exception as e:
+            self.summary.setText('<b>BOOX data could not be collected.</b> Nothing was synced.')
             QMessageBox.critical(self, 'NeoMatrix', 'Could not collect from the connected BOOX:\n\n' + str(e))
 
     def analyze(self):
@@ -754,6 +774,8 @@ class FrankenDialog(QDialog):
             self.annotation_rows = rows_from_text(ann_text)
             self.bookmark_rows = rows_from_text(bm_text)
             self.source_zip = path
+            self.collection_source = 'diagnostic-zip'
+            self.book_file_check, self.excluded_book_rows, self.collection_serial = None, [], None
             self._match_books()
             self._populate_table()
             self.archive_btn.setEnabled(any(v.get('book_id') is not None for v in self.matches.values()))
@@ -1238,15 +1260,33 @@ class FrankenDialog(QDialog):
     def reader_report(self):
         from calibre_plugins.frankenboox.reader_bridge import REPORT_KEY
         reports = self.db.get_custom_book_data(REPORT_KEY)
-        lines = ['Latest sync'] + getattr(self, 'last_sync_issues', []) + ['','Saved reading positions']
-        for book_id, report in sorted(reports.items()):
-            title = self.db.field_for('title', book_id) or str(book_id)
-            position = 'Updated in Calibre' if report.get('resume_applied') else ('Existing Calibre position kept' if report.get('resume') else 'Reading position could not be synced')
-            if not report.get('resume'):
-                position = {'image-only-start':'Cover or title page; Calibre position kept',
-                            'different-formats':'Different formats; Calibre position kept'}.get(report.get('resume_issue_kind'), position)
-            lines.append(str(title) + ': ' + position + '; ' + str(report.get('mapped',0)) + ' note(s) imported')
-            lines.extend('  '+str(x) for x in report.get('skipped',[]))
+        lines = ['Latest sync'] + getattr(self, 'last_sync_issues', [])
+        check = getattr(self, 'book_file_check', None)
+        if check is not None:
+            lines += ['', 'Book file checks']
+            for label, rows in (('Old recorded path is missing; history kept', check.missing),
+                                ('Excluded from sync; history kept', self.excluded_book_rows),
+                                ('File could not be checked; record kept', check.uncertain)):
+                lines.extend(str(row.get('title') or row.get('name') or 'Untitled book') + ': ' + label for row in rows)
+            lines.extend(check.warnings)
+        current = {match['book_id'] for match in self.matches.values() if match.get('book_id') is not None}
+        if self.collection_source == 'direct-adb':
+            sections = [('Current books', [(bid, report) for bid, report in sorted(reports.items()) if bid in current]),
+                        ('Saved history from other books — not part of this sync', [(bid, report) for bid, report in sorted(reports.items()) if bid not in current])]
+        else:
+            sections = [('Saved reading positions', sorted(reports.items()))]
+        for heading, items in sections:
+            if not items:
+                continue
+            lines += ['', heading]
+            for book_id, report in items:
+                title = self.db.field_for('title', book_id) or str(book_id)
+                position = 'Updated in Calibre' if report.get('resume_applied') else ('Existing Calibre position kept' if report.get('resume') else 'Reading position could not be synced')
+                if not report.get('resume'):
+                    position = {'image-only-start':'Cover or title page; Calibre position kept',
+                                'different-formats':'Different formats; Calibre position kept'}.get(report.get('resume_issue_kind'), position)
+                lines.append(str(title) + ': ' + position + '; ' + str(report.get('mapped',0)) + ' note(s) imported')
+                lines.extend('  '+str(x) for x in report.get('skipped',[]))
         dlg = QDialog(self); dlg.setWindowTitle('NeoMatrix — Sync details'); dlg.resize(850,600)
         layout = QVBoxLayout(dlg); text = QTextEdit(); text.setReadOnly(True)
         text.setPlainText('\n'.join(lines) or 'No sync has run yet.')
@@ -1426,17 +1466,31 @@ class FrankenDialog(QDialog):
             # Missing, corrupt or incomplete saved data is eligible for repair.
             return False
 
+    def _book_file_summary(self):
+        check = getattr(self, 'book_file_check', None)
+        if check is None:
+            return ''
+        messages = []
+        if check.missing:
+            messages.append(str(len(check.missing)) + ' old BOOX entries skipped; saved history kept.')
+        excluded = getattr(self, 'excluded_book_rows', ())
+        if excluded:
+            messages.append(str(len(excluded)) + ' selected records excluded from sync.')
+        if check.uncertain:
+            messages.append(str(len(check.uncertain)) + ' book files could not be checked; entries kept. See Sync details.')
+        return '<br>' + ' '.join(messages) if messages else ''
+
     def _sync_issue_summary(self, entries, issues):
         self.last_sync_issues = list(dict.fromkeys(str(issue) for issue in issues))
         if not self.last_sync_issues:
-            return ''
+            return self._book_file_summary()
         affected = set()
         for book_id, state, _ in entries:
             title = str(self.db.field_for('title', book_id) or (state.get('boox_book') or {}).get('title') or 'Book ' + str(book_id))
             if any(issue.startswith(title + ':') for issue in self.last_sync_issues):
                 affected.add(book_id)
         label = (str(len(affected)) + (' book needs attention.' if len(affected) == 1 else ' books need attention.')) if affected else 'Sync needs attention.'
-        return '<br><b>' + label + '</b> See More… → Sync details.'
+        return '<br><b>' + label + '</b> See More… → Sync details.' + self._book_file_summary()
 
     def _resume_sync_issues(self, entries):
         """Surface unresolved saved positions even when source data is unchanged."""
