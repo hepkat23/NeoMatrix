@@ -20,12 +20,24 @@ class Worker(QThread):
 
 def run_background(owner, message, task):
     owner.summary.setText(message)
+    activity_status = getattr(owner, 'activity_status', None)
+    activity_bar = getattr(owner, 'activity_bar', None)
+    if activity_status is not None:
+        activity_status.setText(message)
+    if activity_bar is not None:
+        activity_bar.show()
     worker = Worker(task, owner)
     loop = QEventLoop()
     worker.status.connect(owner.summary.setText, Qt.ConnectionType.QueuedConnection)
+    if activity_status is not None:
+        worker.status.connect(activity_status.setText, Qt.ConnectionType.QueuedConnection)
     worker.finished.connect(loop.quit, Qt.ConnectionType.QueuedConnection)
     owner._sync_busy = True
-    owner.setEnabled(False)
+    set_busy = getattr(owner, 'set_busy', None)
+    if set_busy is not None:
+        set_busy(True)
+    else:
+        owner.setEnabled(False)
     try:
         worker.start()
         loop.exec()
@@ -35,5 +47,10 @@ def run_background(owner, message, task):
         return worker.result
     finally:
         owner._sync_busy = False
-        owner.setEnabled(True)
+        if set_busy is not None:
+            set_busy(False)
+        else:
+            owner.setEnabled(True)
+        if activity_bar is not None:
+            activity_bar.hide()
         worker.deleteLater()

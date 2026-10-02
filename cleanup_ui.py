@@ -1,11 +1,12 @@
 """Separate, opt-in BOOX cleanup dialog; ordinary Sync remains read-only."""
 from pathlib import Path
 from qt.core import (QAbstractItemView, QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
-                     QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
+                     QMessageBox, QPushButton, QProgressBar, QTableWidget, QTableWidgetItem,
                      QVBoxLayout, QTabWidget, QWidget, Qt)
 from calibre_plugins.frankenboox.background import run_background
 from calibre_plugins.frankenboox.storage_cleanup import AdbDevice, clean, restore, scan_device, verify_backup
 from calibre_plugins.frankenboox.boox_files import record_token
+from calibre_plugins.frankenboox.record_cleanup import remove_records, restore_records, read_backup, eligible_records
 
 
 def size_text(size):
@@ -31,15 +32,19 @@ class CleanupDialog(QDialog):
         self.setWindowTitle('NeoMatrix — BOOX cleanup')
         self.resize(1060, 650)
         layout = QVBoxLayout(self)
-        note = QLabel('Scan finds old book records and unused reader files. '
-                      'Book records can be excluded from sync while keeping their history. '
-                      'Removing unused files saves a backup first.')
+        note = QLabel('Manage old BOOX book records and unused reader files. '
+                      'Removal saves a backup first. Books, notes and bookmarks are kept.')
         note.setWordWrap(True)
         layout.addWidget(note)
         buttons = QHBoxLayout()
         self.scan_btn = QPushButton('Scan BOOX')
-        self.exclude_btn = QPushButton('Exclude selected from sync')
-        self.include_btn = QPushButton('Include selected again')
+        self.delete_records_btn = QPushButton('Remove selected from BOOX…')
+        self.restore_records_btn = QPushButton('Restore record backup…')
+        self.delete_records_btn.setAutoDefault(False)
+        self.delete_records_btn.clicked.connect(self.remove_book_records)
+        self.restore_records_btn.clicked.connect(self.restore_book_records)
+        self.exclude_btn = QPushButton('Exclude from sync')
+        self.include_btn = QPushButton('Include again')
         self.remove_btn = QPushButton('Back up and remove selected…')
         self.restore_btn = QPushButton('Restore a cleanup backup…')
         self.remove_btn.setEnabled(False)
@@ -50,9 +55,23 @@ class CleanupDialog(QDialog):
         self.include_btn.clicked.connect(lambda: self.set_record_exclusions(False))
         self.remove_btn.clicked.connect(self.remove_selected)
         self.restore_btn.clicked.connect(self.restore_backup)
-        for button in (self.scan_btn, self.exclude_btn, self.include_btn, self.remove_btn, self.restore_btn):
-            buttons.addWidget(button)
+        buttons.addWidget(self.scan_btn)
+        self.select_all_btn = QPushButton('Select all')
+        self.clear_selection_btn = QPushButton('Clear selection')
+        self.select_all_btn.clicked.connect(lambda: self.select_rows(True))
+        self.clear_selection_btn.clicked.connect(lambda: self.select_rows(False))
+        buttons.addWidget(self.select_all_btn)
+        buttons.addWidget(self.clear_selection_btn)
+        buttons.addStretch()
         layout.addLayout(buttons)
+        self.activity_status = QLabel('Ready to scan. No sync is needed first.')
+        self.activity_status.setWordWrap(True)
+        layout.addWidget(self.activity_status)
+        self.activity_bar = QProgressBar()
+        self.activity_bar.setRange(0, 0)
+        self.activity_bar.setTextVisible(False)
+        self.activity_bar.hide()
+        layout.addWidget(self.activity_bar)
         self.tabs = QTabWidget()
         records_page = QWidget(); records_layout = QVBoxLayout(records_page)
         self.show_current = QCheckBox('Show current books too')
@@ -68,7 +87,7 @@ class CleanupDialog(QDialog):
         self.records_table.horizontalHeader().setStretchLastSection(True)
         self.records_table.itemChanged.connect(self.update_record_selection)
         records_layout.addWidget(self.records_table)
-        self.records_summary = QLabel('Scan checks the saved book locations. Exclusions can be undone here.')
+        self.records_summary = QLabel('Moving or finishing a book keeps its history. Review old locations before removing records.')
         self.records_summary.setWordWrap(True)
         records_layout.addWidget(self.records_summary)
         self.tabs.addTab(records_page, 'Book records')
@@ -93,17 +112,63 @@ class CleanupDialog(QDialog):
         self.tabs.addTab(files_page, 'Unused files')
         self.tabs.currentChanged.connect(self.update_actions)
         layout.addWidget(self.tabs)
-        self.update_actions()
+        actions = QHBoxLayout()
+        for button in (self.delete_records_btn, self.restore_records_btn, self.exclude_btn, self.include_btn, self.remove_btn, self.restore_btn):
+            actions.addWidget(button)
+        actions.addStretch()
         close = QPushButton('Close')
+        self.close_btn = close
         close.clicked.connect(self.accept)
-        layout.addWidget(close)
+        actions.addWidget(close)
+        layout.addLayout(actions)
+        self.update_actions()
+        self.update_record_selection()
+
+    def set_busy(self, busy):
+        controls = (self.scan_btn, self.select_all_btn, self.clear_selection_btn, self.tabs,
+                    self.delete_records_btn, self.restore_records_btn, self.exclude_btn,
+                    self.include_btn, self.remove_btn, self.restore_btn, self.close_btn)
+        if busy:
+            self._busy_enabled = {control: control.isEnabled() for control in controls}
+            for control in controls:
+                control.setEnabled(False)
+        else:
+            for control, enabled in self._busy_enabled.items():
+                control.setEnabled(enabled)
 
     def update_actions(self, *args):
         records = self.tabs.currentIndex() == 0
+        self.delete_records_btn.setVisible(records)
+        self.restore_records_btn.setVisible(records)
         self.exclude_btn.setVisible(records)
         self.include_btn.setVisible(records)
         self.remove_btn.setVisible(not records)
         self.restore_btn.setVisible(not records)
+        self.update_bulk_selection()
+
+    def selection_table(self):
+        return self.records_table if self.tabs.currentIndex() == 0 else self.table
+
+    def update_bulk_selection(self):
+        table = self.selection_table()
+        checks = [table.item(index, 0) for index in range(table.rowCount())]
+        checks = [item for item in checks if item is not None
+                  and item.flags() & Qt.ItemFlag.ItemIsUserCheckable]
+        self.select_all_btn.setEnabled(any(item.checkState() != Qt.CheckState.Checked for item in checks))
+        self.clear_selection_btn.setEnabled(any(item.checkState() == Qt.CheckState.Checked for item in checks))
+
+    def select_rows(self, selected):
+        table = self.selection_table()
+        table.blockSignals(True)
+        try:
+            for index in range(table.rowCount()):
+                item = table.item(index, 0)
+                if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                    item.setCheckState(Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked)
+        finally:
+            table.blockSignals(False)
+        self.update_record_selection()
+        self.update_selection()
 
     def excluded_tokens(self):
         if not self.scan or self.settings is None:
@@ -118,6 +183,11 @@ class CleanupDialog(QDialog):
         selected = self.selected_record_tokens(); excluded = self.excluded_tokens()
         self.exclude_btn.setEnabled(self.settings is not None and bool(selected - excluded))
         self.include_btn.setEnabled(self.settings is not None and bool(selected & excluded))
+        removable = [token for record, row, token in self.visible_records
+                     if token in selected and record.state != 'P']
+        self.delete_records_btn.setEnabled(bool(removable) and len(removable) == len(selected))
+        self.delete_records_btn.setToolTip('Remove selected saved library entries from BOOX after backing them up. Current books are protected.')
+        self.update_bulk_selection()
 
     def set_record_exclusions(self, exclude):
         if self.settings is None or not self.scan:
@@ -133,6 +203,8 @@ class CleanupDialog(QDialog):
         settings[self.scan.serial] = sorted(excluded)
         self.settings['excluded_book_records'] = settings
         self.populate_records()
+        self.activity_status.setText('%d record(s) %s. Notes, bookmarks and history are kept.' %
+                                     (len(selected), 'excluded from sync' if exclude else 'included again'))
 
     def populate_records(self):
         excluded = self.excluded_tokens()
@@ -146,7 +218,7 @@ class CleanupDialog(QDialog):
             for index, (record, row, token) in enumerate(self.visible_records):
                 check = QTableWidgetItem('')
                 flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-                if token and self.settings is not None:
+                if token:
                     flags |= Qt.ItemFlag.ItemIsUserCheckable
                     check.setCheckState(Qt.CheckState.Unchecked)
                 check.setFlags(flags); self.records_table.setItem(index, 0, check)
@@ -189,6 +261,7 @@ class CleanupDialog(QDialog):
 
     def update_selection(self, *args):
         self.remove_btn.setEnabled(bool(self.selected_paths()))
+        self.update_bulk_selection()
 
     def refresh(self):
         self.remove_btn.setEnabled(False)
@@ -198,6 +271,8 @@ class CleanupDialog(QDialog):
         self.table.setRowCount(0)
         self.records_table.setRowCount(0)
         self.exclude_btn.setEnabled(False); self.include_btn.setEnabled(False)
+        self.delete_records_btn.setEnabled(False)
+        self.update_bulk_selection()
         try:
             def task(status):
                 device = AdbDevice(self.adb)
@@ -205,7 +280,9 @@ class CleanupDialog(QDialog):
             self.device, self.scan = run_background(self, 'Scanning BOOX storage…', task)
             self.populate()
             self.populate_records()
+            self.activity_status.setText('Scan complete. Select items, then use the buttons below the list.')
         except Exception as error:
+            self.activity_status.setText('Scan could not complete. No files or exclusions were changed.')
             self.summary.setText('Scan could not complete. No files were changed.')
             self.records_summary.setText('Scan could not complete. No exclusions were changed.')
             QMessageBox.warning(self, 'BOOX storage scan', str(error))
@@ -296,4 +373,58 @@ class CleanupDialog(QDialog):
                                     'You can open NeoReader again.' % (result['restored_files'], result['already_present']))
         except Exception as error:
             QMessageBox.warning(self, 'Restore stopped', str(error))
+        self.refresh()
+
+
+    def remove_book_records(self):
+        if not self.scan or not self.device:
+            return
+        tokens = self.selected_record_tokens()
+        try:
+            rows = eligible_records(self.scan, tokens)
+        except Exception as error:
+            QMessageBox.warning(self, 'BOOX book records', str(error)); return
+        text = ('Save and close any open books on BOOX first.\n\n'
+                'Back up and remove %d selected library record(s) from BOOX?\n\n%s\n\n'
+                'Ebook files, notes, bookmarks and handwriting stay on the device. '
+                'NeoReader may hide the removed entries and their history until you restore the backup. '
+                'Possible moved copies and unchecked locations need your review. '
+                'Cloud sync or a new library scan may recreate entries.') % (
+                    len(rows), '\n'.join((row.get('title') or row.get('name') or 'Untitled book') for row in rows[:10]))
+        if QMessageBox.question(self, 'Remove selected BOOX records', text,
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        filename, _ = QFileDialog.getSaveFileName(self, 'Save BOOX record backup',
+                                                  'NeoMatrix-BOOX-record-backup.json', 'Record backup (*.json)')
+        if not filename: return
+        if not filename.lower().endswith('.json'): filename += '.json'
+        try:
+            result = run_background(self, 'Backing up selected BOOX records…',
+                                    lambda status: remove_records(self.device, self.scan, tokens, filename, status))
+            QMessageBox.information(self, 'BOOX records removed', '%d library record(s) removed.\n\nBackup: %s' %
+                                    (result['removed_records'], result['backup']))
+        except Exception as error:
+            QMessageBox.warning(self, 'Record removal stopped', str(error))
+        self.refresh()
+
+    def restore_book_records(self):
+        filename, _ = QFileDialog.getOpenFileName(self, 'Choose BOOX record backup', '', 'Record backup (*.json)')
+        if not filename: return
+        try:
+            backup = read_backup(filename)
+            if QMessageBox.question(self, 'Restore BOOX book records',
+                                    'Save and close open books on BOOX first.\n\nRestore %d book record(s) to the same BOOX? '
+                                    'Newer or conflicting records are protected.' % len(backup['records']),
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
+            def task(status):
+                device = self.device or AdbDevice(self.adb)
+                return restore_records(device, filename, status)
+            result = run_background(self, 'Restoring BOOX book records…', task)
+            QMessageBox.information(self, 'BOOX records restored', '%d record(s) restored; %d already present.' %
+                                    (result['restored_records'], result['already_present']))
+        except Exception as error:
+            QMessageBox.warning(self, 'Record restore stopped', str(error))
         self.refresh()

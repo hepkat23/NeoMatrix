@@ -228,8 +228,9 @@ def book_status(row, device, catalogue):
 
 
 def scan_device(device, status=lambda text: None, include_kindle=True):
+    status('Connecting to BOOX…')
     device.ensure_connected()
-    status('Checking book files on the BOOX…')
+    status('Reading saved book records…')
     rows = device.metadata()
     records = []
     warnings = []
@@ -238,7 +239,8 @@ def scan_device(device, status=lambda text: None, include_kindle=True):
     except Exception as error:
         catalogue = BookCatalogue([], (), False)
         warnings.append('Book locations could not all be checked; uncertain data is protected. ' + str(error))
-    for row in rows:
+    for number, row in enumerate(rows, 1):
+        status('Checking book locations: %d of %d…' % (number, len(rows)))
         try:
             records.append(inspect_book_record(row, device, catalogue))
         except Exception:
@@ -264,7 +266,8 @@ def scan_device(device, status=lambda text: None, include_kindle=True):
         except Exception as error:
             warnings.append(label + ': ' + str(error))
             continue
-        for group in groups:
+        for number, group in enumerate(groups, 1):
+            status('Checking %s: %d of %d folders…' % (label.lower(), number, len(groups)))
             if not valid_group(group):
                 warnings.append('Unrecognized folder protected: ' + group)
                 continue
@@ -698,3 +701,61 @@ class AdbDevice:
         self.shell('toybox mv -n ' + shlex.quote(remote_temp) + ' ' + shlex.quote(path))
         if self.checksum(path) != checksum:
             raise CleanupError('A file appeared during restore. Existing data was retained.')
+
+
+
+    # Kept separate from orphan file cleanup: these methods touch only library records.
+    def check_record_provider(self):
+        try:
+            from calibre_plugins.frankenboox.record_cleanup import SUPPORTED_PROVIDER_SHA256
+        except ImportError:
+            from record_cleanup import SUPPORTED_PROVIDER_SHA256
+        sdk = self.shell('getprop ro.build.version.sdk').strip()
+        if not sdk.isascii() or not sdk.isdigit() or int(sdk) < 31:
+            raise CleanupError('Book-record removal needs Android 12 or newer.')
+        paths = self.shell('pm path com.onyx.kreader').strip().splitlines()
+        if len(paths) != 1 or not paths[0].startswith('package:'):
+            raise CleanupError('This NeoReader installation has not been verified for record removal.')
+        path = paths[0][8:]
+        digest = self.shell('toybox sha256sum ' + shlex.quote(path)).split()[0]
+        if digest not in SUPPORTED_PROVIDER_SHA256:
+            raise CleanupError('This BOOX firmware has not been verified for record removal. Nothing changed.')
+
+
+    def delete_record(self, row):
+        try:
+            from calibre_plugins.frankenboox.record_cleanup import conditional_where, record_command
+        except ImportError:
+            from record_cleanup import conditional_where, record_command
+        output = record_command(self, 'content delete --uri ' + shlex.quote(URI) +
+                                ' --where ' + shlex.quote(conditional_where(row)))
+        match = re.fullmatch(r'Deleted (\d+) rows?\.?', output)
+        if match:
+            return int(match.group(1))
+        if not output:
+            # Some Android builds print no count; verify the exact ID/UUID is gone.
+            remaining = self.record_metadata()
+            return 0 if any(item.get('id') == row['id'] or item.get('uuid') == row['uuid']
+                            for item in remaining) else 1
+        raise CleanupError('BOOX record removal returned an unexpected response.')
+
+
+    def insert_record(self, row):
+        try:
+            from calibre_plugins.frankenboox.record_cleanup import validate_row, record_command
+        except ImportError:
+            from record_cleanup import validate_row, record_command
+        validate_row(row)
+        binds = [(' --bind ' + shlex.quote(key + ':n:')) if value is None else
+                 (' --bind ' + shlex.quote(key + ':s:' + value.replace('\\', '\\\\').replace(':', '\\:'))) for key, value in sorted(row.items())]
+        # Null binds need an empty third field; strings preserve colons on Android 12+.
+        record_command(self, 'content insert --uri ' + shlex.quote(URI) + ''.join(binds))
+        actual = [item for item in self.record_metadata()
+                  if item.get('id') == row['id'] or item.get('uuid') == row['uuid']]
+        if len(actual) != 1 or any(actual[0].get(key) != value for key, value in row.items()):
+            raise CleanupError('BOOX rejected the record insertion or its values differ. Nothing overwritten.')
+
+
+    def record_metadata(self):
+        text = self.shell('content query --uri ' + shlex.quote(URI))
+        return [] if text.strip() == 'No result found.' else parse_metadata(text)

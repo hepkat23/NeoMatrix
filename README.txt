@@ -1,4 +1,4 @@
-NeoMatrix 1.4.6 — BOOX reading data in Calibre
+NeoMatrix 1.4.7 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -110,3 +110,11 @@ family so both plugins compare the same spine/text ordering.
 highlight quotes. Sync details distinguish image-only cover/title-page starts,
 BOOX PDF versus Calibre EPUB copies, and unresolved text locations. Existing
 positions are preserved whenever a safe comparison is unavailable.
+
+BOOX cleanup: scan status and an animated activity bar stay visible above both tabs.
+Select all checks only available rows on the current tab; Clear selection unchecks them.
+Use the action buttons below the list to exclude selected records from sync or back up and remove selected unused files.
+Scanning does not require a sync first.
+
+Book records: Remove selected from BOOX saves a verified JSON backup and deletes only selected stale Metadata entries. Current books are protected. Notes, bookmarks, handwriting, shelf tables and ebook files are not deleted; NeoReader may hide the removed entries/history until Restore record backup is used. Moved/unchecked entries need review; a missing old path is not a reading-position failure.
+Record removal is limited to the verified NeoReader provider build (SHA-256 539b26bdb3ffecd91a22a0dbe753af43c0e11f65f61d1de851c4516d65500b13). Other firmware is blocked until its deletion and insertion behavior is verified. Normal Sync never deletes records.
