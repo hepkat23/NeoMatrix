@@ -24,6 +24,7 @@ from calibre.utils.config import JSONConfig
 from calibre_plugins.frankenboox.integration import ensure_columns, integrate_with_reader as integrate, RestartRequired
 from calibre_plugins.frankenboox.sync_state import state_signature, combine_book_entries, volume_identity
 
+from calibre_plugins.frankenboox.storage_cleanup import read_metadata_exact
 from calibre_plugins.frankenboox.boox_files import check_book_files, exclude_saved_records
 
 SYNC_KEY = 'neomatrix_sync_status_v1'
@@ -489,11 +490,11 @@ class FrankenDialog(QDialog):
         self.excluded_book_rows = []
         self.collection_serial = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.7')
+        self.setWindowTitle('NeoMatrix — v1.4.8')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.7</b><br>'
+            '<b>NeoMatrix v1.4.8</b><br>'
             'Close your books, connect BOOX by USB, then press <b>Sync</b>. '
             'Sync keeps your farthest reading position when it can match the book. '
             'You’ll be asked before positions are sent to BOOX.'
@@ -717,7 +718,10 @@ class FrankenDialog(QDialog):
                     ('Reading bookmarks…', 'content://com.onyx.content.database.ContentProvider/Bookmark'),
                 ):
                     status(label)
-                    rows.append(rows_from_text(adb_text(adb, 'shell', 'content', 'query', '--uri', uri, timeout=90)))
+                    if uri.endswith('/Metadata'):
+                        rows.append(read_metadata_exact(lambda command: adb_text(adb, 'shell', command, timeout=90)))
+                    else:
+                        rows.append(rows_from_text(adb_text(adb, 'shell', 'content', 'query', '--uri', uri, timeout=90)))
                 if not rows[0]:
                     raise RuntimeError('NeoReader Metadata returned no rows.')
                 status('Checking current BOOX book files…')

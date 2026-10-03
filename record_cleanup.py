@@ -94,6 +94,17 @@ def protect_current_book(device, row):
         raise CleanupError('A selected book is now at its saved location. Scan again; its record is protected.')
 
 
+def legacy_display_match(current, original):
+    # Older backups trimmed field edges and represented the text "NULL" as null.
+    # Only recognize these already-present rows; never overwrite them on restore.
+    def displayed(value):
+        if value is None:
+            return None
+        return None if value.strip() == 'NULL' else value.strip()
+    return (set(current) == set(original)
+            and all(displayed(current[key]) == original[key] for key in original))
+
+
 def matching_rows(rows, original):
     return [row for row in rows if row.get('id')==original['id'] or row.get('uuid')==original['uuid']]
 
@@ -116,12 +127,17 @@ def remove_records(device, scan, tokens, backup_path, status=lambda text:None):
             device.ensure_connected()
             if matching_rows(metadata(device),row)!=[row]:raise CleanupError('A selected record changed. Removal stopped.')
             protect_current_book(device,row)
-            if device.delete_record(row)!=1:raise CleanupError('BOOX rejected a changed record. Removal stopped.')
+            if device.delete_record(row)!=1:
+                after = matching_rows(metadata(device),row)
+                title = row.get('title') or row.get('name') or 'Untitled book'
+                if after != [row]:
+                    raise CleanupError('BOOX changed the record for “%s”. It was not removed.' % title)
+                raise CleanupError('BOOX did not remove “%s”. The record was kept.' % title)
             if matching_rows(metadata(device),row):raise CleanupError('Record removal could not be verified.')
             removed+=1
     except Exception as error:
-        raise CleanupError('%s\n%d removal(s) confirmed. Check the last operation before retrying. Keep this recovery backup: %s' %
-                           (error,removed,backup_path)) from error
+        raise CleanupError('%s\n\nRemoved: %d of %d selected records. Cleanup stopped; rescan to review what remains.\nRecovery backup: %s' %
+                           (error,removed,len(rows),backup_path)) from error
     return {'removed_records':removed,'backup':str(backup_path)}
 
 
@@ -132,7 +148,7 @@ def restore_records(device, backup_path, status=lambda text:None):
     rows=backup['records'];current=metadata(device);pending=[]
     for row in rows:
         matches=matching_rows(current,row)
-        if matches==[row]:continue
+        if matches==[row] or (len(matches)==1 and legacy_display_match(matches[0],row)):continue
         if matches:raise CleanupError('BOOX has newer or conflicting records. Nothing restored.')
         pending.append(row)
     if pending:device.pause_reader()

@@ -2,7 +2,7 @@ import copy,json,sqlite3,tempfile,unittest
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from record_cleanup import remove_records,restore_records,record_token,conditional_where,read_backup,eligible_records
+from record_cleanup import remove_records,restore_records,record_token,conditional_where,read_backup,eligible_records,write_backup
 from storage_cleanup import Scan,BookRecord,CleanupError
 ROW={'id':'1','uuid':'a'*32,'title':"O'Brien: 日本語",'location':'/storage/emulated/0/Books/Old.epub','progress':'3/10','readingStatus':'1','extraAttributes':'{"position":"chapter:2"}','description':None}
 class Device:
@@ -88,6 +88,32 @@ class Tests(unittest.TestCase):
   self.assertEqual(len(self.dev.metadata()),1)
   self.assertEqual(restore_records(self.dev,self.path)['restored_records'],1)
   self.assertEqual(self.dev.metadata(),self.rows)
+ def test_whitespace_and_multiline_removal_restore(self):
+  self.dev.db.execute('UPDATE Metadata SET title=?,description=?,extraAttributes=?',
+                      (' title with a trailing space ', 'line one\nline two', ' {"x":"NULL, id=inside value"} '))
+  self.rows=self.dev.metadata();self.scan.metadata=self.rows
+  self.tokens={record_token('TEST',self.rows[0])}
+  self.assertEqual(self.remove()['removed_records'],1)
+  restore_records(self.dev,self.path);self.assertEqual(self.dev.metadata(),self.rows)
+ def test_legacy_partial_backup_retains_unmodified_whitespace_record(self):
+  second=dict(ROW,id='2',uuid='b'*32,title=' Second book ')
+  self.dev.insert_record(second)
+  original_first=self.dev.metadata()[0]
+  legacy_second=dict(self.dev.metadata()[1],title='Second book')
+  write_backup(self.path,'TEST',[original_first,legacy_second])
+  self.dev.delete_record(original_first)
+  result=restore_records(self.dev,self.path)
+  self.assertEqual(result,{'restored_records':1,'already_present':1})
+  self.assertEqual(self.dev.metadata()[1]['title'],' Second book ')
+ def test_legacy_backup_does_not_overwrite_new_progress(self):
+  self.rows=self.dev.metadata();write_backup(self.path,'TEST',self.rows)
+  self.dev.db.execute("UPDATE Metadata SET progress='9/10'")
+  with self.assertRaises(CleanupError):restore_records(self.dev,self.path)
+  self.assertEqual(self.dev.metadata()[0]['progress'],'9/10')
+ def test_rejection_message_identifies_record_and_partial_count(self):
+  self.dev.delete_record=lambda row:0
+  with self.assertRaisesRegex(CleanupError, 'O.Brian|O.Brie') as error:self.remove()
+  self.assertIn('Removed: 0 of 1 selected records',str(error.exception))
  def test_case_change_cannot_match_case_insensitive_column(self):
   self.dev.db.execute("UPDATE Metadata SET title=lower(title)")
   self.assertEqual(self.dev.delete_record(self.rows[0]),0)

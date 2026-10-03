@@ -118,6 +118,47 @@ def parse_metadata(text):
     return rows
 
 
+
+def metadata_columns(query):
+    # Discover the actual firmware schema instead of assuming a fixed column list.
+    projection = "(SELECT group_concat(name, ',') FROM pragma_table_info('Metadata')) AS nm_columns:count(*) AS nm_count"
+    rows = parse_metadata(query('content query --uri ' + shlex.quote(URI) +
+                                ' --projection ' + shlex.quote(projection)))
+    if len(rows) != 1 or not rows[0].get('nm_columns'):
+        raise CleanupError('BOOX metadata columns could not be checked.')
+    columns = rows[0]['nm_columns'].split(',')
+    if (len(columns) > 256 or len(set(columns)) != len(columns)
+            or not {'id', 'uuid'}.issubset(columns)
+            or any(not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name) for name in columns)):
+        raise CleanupError('Unexpected BOOX metadata schema; nothing changed.')
+    return tuple(columns)
+
+
+def read_metadata_exact(query, columns=None, allow_empty=False):
+    """Read text through hex so whitespace, newlines and literal NULL survive."""
+    columns = columns or metadata_columns(query)
+    projection = ':'.join('CASE WHEN "{0}" IS NULL THEN NULL ELSE '
+                          'hex(CAST("{0}" AS BLOB)) END AS "{0}"'.format(name)
+                          for name in columns)
+    text = query('content query --uri ' + shlex.quote(URI) +
+                 ' --projection ' + shlex.quote(projection))
+    if allow_empty and text.strip() == 'No result found.':
+        return []
+    rows = parse_metadata(text)
+    for row in rows:
+        if set(row) != set(columns):
+            raise CleanupError('Incomplete BOOX metadata. Nothing changed.')
+        for name, value in row.items():
+            if value is None:
+                continue
+            if len(value) % 2 or not re.fullmatch(r'[0-9A-Fa-f]*', value):
+                raise CleanupError('BOOX metadata could not be read without losing data.')
+            try:
+                row[name] = bytes.fromhex(value).decode('utf-8', 'strict')
+            except (ValueError, UnicodeError) as error:
+                raise CleanupError('BOOX text encoding could not be checked. Nothing changed.') from error
+    return rows
+
 def identities(row, kind):
     try:
         extra = json.loads(row.get('extraAttributes') or '{}')
@@ -503,7 +544,12 @@ class AdbDevice:
         return self.run(['shell', command]).decode('utf-8', 'strict').replace('\r', '')
 
     def metadata(self):
-        return parse_metadata(self.shell('content query --uri ' + shlex.quote(URI)))
+        return self._metadata_snapshot(False)
+
+    def _metadata_snapshot(self, allow_empty):
+        if not getattr(self, '_metadata_columns', None):
+            self._metadata_columns = metadata_columns(self.shell)
+        return read_metadata_exact(self.shell, self._metadata_columns, allow_empty)
 
     def book_catalogue(self, status=lambda text: None):
         """Inventory every mounted user-storage volume; incomplete scans protect data."""
@@ -757,5 +803,4 @@ class AdbDevice:
 
 
     def record_metadata(self):
-        text = self.shell('content query --uri ' + shlex.quote(URI))
-        return [] if text.strip() == 'No result found.' else parse_metadata(text)
+        return self._metadata_snapshot(True)
