@@ -18,8 +18,8 @@ class PositionPushDialog(QDialog):
         self.setWindowTitle('NeoMatrix — push reading positions to BOOX')
         self.resize(1000, 620)
         layout = QVBoxLayout(self)
-        note = QLabel('Close and save books in both readers before previewing. This first push feature supports EPUB positions '
-                      'already verified in saved BOOX data, such as a mapped BOOX bookmark. Other locations are skipped. '
+        note = QLabel('Close and save books in both readers before previewing. EPUB positions are sent only when they can be verified. '
+                      'Unsupported locations are listed below. '
                       'Selected pushes save a backup on your computer and close NeoReader. Reopen each pushed book on BOOX '
                       'to load the position and refresh its percentage before running Sync. Highlights and notes are not pushed.')
         note.setWordWrap(True)

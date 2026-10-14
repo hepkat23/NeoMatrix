@@ -115,9 +115,18 @@ def plan_position(state, book, current_row, calibre_position, device_sha256, dev
             return result('unsupported', 'No saved Calibre EPUB reading position')
         matching = [x for x in observed_positions(state, book) if x['cfi'] == cfi]
         unique = {json.dumps(x['position'], sort_keys=True): x for x in matching}
-        if len(unique) != 1:
-            return result('unsupported', 'Calibre location has not been verified in BOOX data' if not unique else 'BOOX locations for this Calibre position are ambiguous')
-        target = next(iter(unique.values()))
+        if len(unique) > 1:
+            return result('unsupported', 'BOOX locations for this Calibre position are ambiguous')
+        if unique:
+            target = next(iter(unique.values()))
+        else:
+            reverse = getattr(book, 'reverse_position', None)
+            if reverse is None:
+                return result('unsupported', 'Calibre location has not been verified in BOOX data')
+            try:
+                target = reverse(cfi, state)
+            except (ValueError, TypeError, KeyError, OSError) as error:
+                return result('unsupported', 'Cannot send this position to BOOX: ' + str(error))
         current = _resume(backend)
         if target['position'] == current:
             return result('unchanged', 'BOOX already has this reading position')
@@ -134,14 +143,18 @@ def plan_position(state, book, current_row, calibre_position, device_sha256, dev
             return result('conflict', 'BOOX position changed since the last pull')
         current_anchor = book.position(current)
         if not current_anchor:
-            return result('unsupported', 'Current BOOX location cannot be compared safely; no position sent')
-        target_rank = (target['anchor']['spine_index'], target['anchor']['text_offset'])
-        current_rank = (current_anchor['spine_index'], current_anchor['text_offset'])
-        if target_rank <= current_rank:
+            if target.get('method') != 'verified-source-dom':
+                return result('unsupported', 'Current BOOX location cannot be compared safely; no position sent')
+            farther = book.compare_native_positions(target['position'], current) > 0
+        else:
+            target_rank = (target['anchor']['spine_index'], target['anchor']['text_offset'])
+            current_rank = (current_anchor['spine_index'], current_anchor['text_offset'])
+            farther = target_rank > current_rank
+        if not farther:
             return result('unchanged', 'BOOX already has the farthest reading position')
     except (ValueError, TypeError, AttributeError, KeyError):
         return result('unsupported', 'Required identity, position or timestamp data is missing or invalid')
-    return {'status': 'ready', 'reason': 'Verified observed position is ready for explicit push',
+    return {'status': 'ready', 'reason': 'Verified EPUB position is ready for explicit push',
             'metadata_uuid': identity['metadata_uuid'], 'document_id': identity['document_id'],
             'book_path': identity['path'], 'file_md5': expected_md5, 'file_sha256': device_sha256,
             'expected_extra_attributes': raw, 'expected_last_access': current_row['lastAccess'],

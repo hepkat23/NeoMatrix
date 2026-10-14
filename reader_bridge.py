@@ -236,10 +236,31 @@ class Chapter:
 
 
 class Book:
-    def __init__(self, chapters, ids, digest, reading_sha256=None):
+    def __init__(self, chapters, ids, digest, reading_sha256=None, source_path=None):
         self.chapters, self.ids, self.digest = chapters, ids, digest
         self.reading_digest = reading_sha256
         self.xpath_modes = set()
+        self.source_path = source_path
+        self.native_source = None
+
+    def reverse_position(self, cfi, state):
+        try:
+            from calibre_plugins.frankenboox.reader_reverse import NativeSource
+        except ImportError:
+            from reader_reverse import NativeSource
+        if not self.source_path:
+            raise ValueError('Original EPUB source is unavailable')
+        try:
+            self.native_source = NativeSource(self.source_path, self, state)
+            return self.native_source.target(cfi)
+        except Exception as error:
+            self.native_source = None
+            raise ValueError(str(error)) from error
+
+    def compare_native_positions(self, target, current):
+        if self.native_source is None:
+            raise ValueError('Native reverse conversion was not verified')
+        return self.native_source.compare(target, current)
 
     def calibrate(self, state):
         modes = None
@@ -317,7 +338,7 @@ def load_book(path):
         # Calibre can read some nonstandard packages. Keep their import behavior;
         # equivalence-based pushes require a valid conservative fingerprint.
         reading_sha256 = None
-    return Book(chapters, ids, digest, reading_sha256)
+    return Book(chapters, ids, digest, reading_sha256, path)
 
 
 def stable_id(identity, item, kind):

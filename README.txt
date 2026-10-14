@@ -1,4 +1,4 @@
-NeoMatrix 1.4.8 — BOOX reading data in Calibre
+NeoMatrix 1.4.9 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -12,13 +12,13 @@ Save and close books in both readers. Connect and unlock BOOX, then click Sync.
 NeoMatrix reads the device, imports changed notes and reading data, and compares
 reading positions in both places. Up-to-date books are not rewritten.
 
-When newer Calibre positions can safely be sent to BOOX, Sync shows the book
+When farther Calibre positions can safely be sent to BOOX, Sync shows the book
 names and asks: Sync both ways, Read BOOX only, or Cancel. No position is sent
 without that choice. Backups are saved automatically on your computer before
 any device update. Reopen and close each pushed book in NeoReader afterward;
 this loads the new location and refreshes the BOOX page percentage.
 
-Newer Calibre positions are kept even if a push is declined or unsupported.
+Farther Calibre positions are kept even if a push is declined or unsupported.
 If both readers changed since the last pull, the position is kept and the
 conflict is reported. No position is guessed from a percentage.
 
@@ -26,9 +26,11 @@ WHAT WORKS
 - BOOX to Calibre: supported EPUB highlights, typed notes, bookmarks and verified
   resume locations become native Calibre reader data. Reading progress uses
   Calibre's standard 0–1 fraction and the BOOX percentage column.
-- Calibre to BOOX: on Android 12 or newer, this first push release supports EPUB resume locations already
-  observed and verified in saved BOOX data, such as mapped BOOX bookmarks. An
-  arbitrary new Calibre location is skipped if no verified BOOX position exists.
+- Calibre to BOOX: on Android 12 or newer, verified EPUB text locations can be
+  sent even when first reached on another reader. Existing mapped BOOX locations
+  remain supported. New locations require the same EPUB reading content and a
+  source-position convention verified by independent BOOX text locations.
+  Unverified, image/spatial, or unsupported locations are skipped with a reason.
   Highlights, typed notes and handwriting are not pushed to BOOX yet.
 - Original BOOX annotations, metadata and handwriting files are archived locally.
   Handwriting can be viewed in NeoMatrix; native editable handwriting overlays
@@ -47,7 +49,7 @@ The original metadata is backed up first, the update is conditional, and device
 readback must match. A repeat push to the same location performs no write.
 
 A pushed book cannot import an old BOOX page fraction before NeoReader refreshes
-it. Ordinary imports retain unrelated annotations and newer Calibre positions.
+it. Ordinary imports retain unrelated annotations and farther Calibre positions.
 No ebook file is modified. Only the exported Android metadata provider is used;
 no rooting, firmware modification or proprietary source code is required.
 
@@ -120,3 +122,17 @@ Book records: Remove selected from BOOX saves a verified JSON backup and deletes
 Record removal is limited to the verified NeoReader provider build (SHA-256 539b26bdb3ffecd91a22a0dbe753af43c0e11f65f61d1de851c4516d65500b13). Other firmware is blocked until its deletion and insertion behavior is verified. Normal Sync never deletes records.
 
 1.4.8 reads BOOX metadata without trimming spaces or losing newlines/literal NULL text. Sync and cleanup use the same values. Partial-cleanup messages identify the stopped record and count removals; restore can recognize untouched entries in older trimmed backups without modifying them.
+
+1.4.9 adds exact source-verified reverse EPUB position conversion. It verifies
+chapter order and cumulative resource sizes against native chapter bounds,
+requires a uniquely calibrated raw DOM convention and two independent native
+text nodes, and round-trips the generated position to the identical Calibre CFI.
+No percentage or rendered-text offset is substituted for a NeoReader source
+coordinate. Source encodings, surrogate character conventions and DOM layouts
+that cannot be verified are rejected. BOOX positions in earlier verified
+chapters can be compared without guessing an offset inside a blank element.
+The Grimscribe X3-to-BOOX handoff was verified on a physical GoColor7_2, followed
+by a cold-open/close and native position readback; notes and bookmarks remained
+unchanged. Repeat preview reported unchanged. Older device clocks do not defeat
+farthest-position selection. This release does not add PDF or comic progress
+conversion; the current CrossPoint Calibre plugin also handles EPUB only.
