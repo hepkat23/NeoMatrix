@@ -499,11 +499,11 @@ class FrankenDialog(QDialog):
         self.excluded_book_rows = []
         self.collection_serial = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.11')
+        self.setWindowTitle('NeoMatrix — v1.4.12')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.11</b><br>'
+            '<b>NeoMatrix v1.4.12</b><br>'
             'Close your books, connect BOOX by USB, then press <b>Sync</b>. '
             'Sync keeps your farthest reading position when it can match the book. '
             'You’ll be asked before positions are sent to BOOX.'
@@ -646,7 +646,7 @@ class FrankenDialog(QDialog):
             QMessageBox.warning(self, 'NeoMatrix — Sync needs attention', str(error))
             self.summary.setText('<b>Sync stopped.</b> ' + str(error) + ' Nothing was written to Calibre.')
             return
-        from calibre_plugins.frankenboox.sync_flow import prepare_sync, execute_pushes, default_backup_directory
+        from calibre_plugins.frankenboox.sync_flow import prepare_sync, execute_pushes, default_backup_directory, carry_verified_mappings
         entries = combine_book_entries([self._archive_payload(m) for m in self.matches.values() if m.get('book_id') is not None])
         try:
             review = run_background(self, 'Comparing reading positions in Calibre and BOOX…',
@@ -654,6 +654,7 @@ class FrankenDialog(QDialog):
         except Exception as error:
             self.summary.setText('<b>Sync stopped.</b> Could not compare reading positions: ' + _html(str(error)))
             return
+        pending = carry_verified_mappings(pending, entries)
         pending_ids = {entry[0] for entry in pending}
         restore_entries = [entry for entry in entries if entry[0] in review.get('pull', ()) and entry[0] not in pending_ids]
         pending += restore_entries

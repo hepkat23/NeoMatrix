@@ -118,6 +118,23 @@ def prepare_sync(owner, entries, status, device_factory=None):
     return {'plans':plans, 'keep':keep, 'issues':issues, 'device':device, 'pull':pull}
 
 
+def carry_verified_mappings(pending, reviewed):
+    """Carry fresh page verification into independently prepared archive entries."""
+    import copy
+    try:
+        from calibre_plugins.frankenboox.sync_state import state_signature
+    except ImportError:
+        from sync_state import state_signature
+    by_id={bid:state for bid,state,files in reviewed}
+    for bid,state,files in pending:
+        verified=by_id.get(bid) or {}
+        mapping=verified.get('fixed_format_mapping')
+        if (mapping and state.get('boox_identity')==verified.get('boox_identity')
+                and state_signature(state)==state_signature(verified)):
+            state['fixed_format_mapping']=copy.deepcopy(mapping)
+    return pending
+
+
 def default_backup_directory():
     from calibre.utils.config import config_dir
     return Path(config_dir) / 'plugins' / 'neomatrix-position-backups'

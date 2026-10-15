@@ -122,6 +122,21 @@ class FixedFormatTests(unittest.TestCase):
         self.assertEqual(book.page_from_cfi(book.cfi(2)),2)
         with self.assertRaisesRegex(ValueError,'omitted'):book.cfi(1)
 
+    def test_reviewed_mapping_reaches_separately_built_pending_archive(self):
+        from sync_flow import carry_verified_mappings
+        book,db,state,device=self.fixture()
+        pending_state=copy.deepcopy(state)
+        fixed_sync.verify_book(db,1,state,device)
+        pending=carry_verified_mappings([(1,pending_state,{})],[(1,state,{})])
+        report=fixed_sync.integrate_reader(db,1,pending[0][1])
+        self.assertTrue(report['resume_applied'])
+        self.assertEqual(book.page_from_cfi(db.positions[0]['cfi']),0)
+        changed=copy.deepcopy(pending_state)
+        changed.pop('fixed_format_mapping',None)
+        changed['progress']['last_access_ms']=2000
+        carry_verified_mappings([(1,changed,{})],[(1,state,{})])
+        self.assertNotIn('fixed_format_mapping',changed)
+
     def test_pdf_native_reference_is_not_a_display_page_number(self):
         book,db,state,device=self.fixture()
         self.assertEqual(book.native_page(book.native_position(1)),1)
