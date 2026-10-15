@@ -4,7 +4,7 @@ import hashlib
 import json
 
 
-_VOLATILE = ('imported_at_utc', 'sources', 'safety', 'match', 'calibre_integration')
+_VOLATILE = ('imported_at_utc', 'sources', 'safety', 'match', 'calibre_integration','fixed_format_mapping')
 _RECORD_LISTS = (
     ('annotations', 'active'), ('annotations', 'raw_rows'),
     ('bookmarks', 'active'), ('bookmarks', 'raw_rows'),

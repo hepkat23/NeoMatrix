@@ -90,7 +90,7 @@ class FakeDB:
             path.write_bytes(stream.getvalue())
 
     def format_abspath(self, book, fmt):
-        return self.epubs.get(book)
+        return self.epubs.get(book) if fmt=='EPUB' else None
 
 
 class Button:
@@ -375,7 +375,7 @@ class IncrementalSyncTests(unittest.TestCase):
         self.assertEqual(self.db.events, [])
         self.assertIn('1 book needs attention', self.ui.summary_text)
         self.assertIn('More… → Sync details', self.ui.summary_text)
-        self.assertTrue(any('BOOX reading position is unverified' in x for x in self.ui.last_sync_issues))
+        self.assertTrue(any('no matching PDF' in x for x in self.ui.last_sync_issues))
         self.db.data[reader.REPORT_KEY][1]['resume'] = True
         self.ui.sync_direct()
         self.assertNotIn('need attention', self.ui.summary_text)

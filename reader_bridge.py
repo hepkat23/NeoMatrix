@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 ANCHOR_KEY = 'neomatrix_portable_anchors_v1'
 REPORT_KEY = 'neomatrix_reader_report_v1'
 # Bump when conversion rules change so unchanged EPUBs are reintegrated once.
-READER_MAPPING_VERSION = 4
+READER_MAPPING_VERSION = 5
 NS = uuid.UUID('61885b90-e112-4d2f-aa1e-3476976da5e4')
 try:
     from calibre_plugins.frankenboox.epub_identity import reading_digest, IDENTITY_SCHEMA
@@ -546,6 +546,13 @@ def convert(state, book):
 
 
 def integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_position=False):
+    fmt=str((state.get('boox_book') or {}).get('format') or '').upper()
+    if fmt in {'PDF','CBZ','CBR'}:
+        try:
+            from calibre_plugins.frankenboox.fixed_sync import integrate_reader as integrate_fixed
+        except ImportError:
+            from fixed_sync import integrate_reader as integrate_fixed
+        return integrate_fixed(db,book_id,state,use_boox_position,keep_boox_position)
     path = db.format_abspath(book_id, 'EPUB')
     if not path:
         return _integrate_reader(db, book_id, state, use_boox_position, keep_boox_position)

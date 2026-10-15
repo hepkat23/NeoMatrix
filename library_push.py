@@ -90,6 +90,13 @@ def calibre_position(db, book_id, path):
 def preview(db, book_id, state, device, current_row=None):
     if not isinstance(state, dict):
         return {'status': 'unsupported', 'reason': 'No saved BOOX data; run Sync first'}
+    fmt=str((state.get('boox_book') or {}).get('format') or '').upper()
+    if fmt in {'PDF','CBZ','CBR'}:
+        try:
+            from calibre_plugins.frankenboox.fixed_sync import preview as fixed_preview
+        except ImportError:
+            from fixed_sync import preview as fixed_preview
+        return fixed_preview(db,book_id,state,device,current_row)
     path = db.format_abspath(book_id, 'EPUB')
     if not path:
         return {'status': 'unsupported', 'reason': 'Reading-position push currently supports EPUB only'}

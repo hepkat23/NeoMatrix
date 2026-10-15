@@ -119,6 +119,10 @@ def boox_resume_candidate(row):
     backend = tolerant_json(backend)
     if not isinstance(backend, dict):
         return False
+    if str(row.get('type','')).lower() in {'cbz','cbr'}:
+        return any((type(backend.get(key)) is int and backend[key]>=0) or
+                   (isinstance(backend.get(key),str) and re.fullmatch(r'\d+',backend[key]))
+                   for key in ('current_page_position_v3','current_page_position_v2','current_page'))
     return any(_nonempty_position(backend.get(key)) for key in (
         'current_page_position_v3', 'current_page_position_v2', 'current_page'))
 
@@ -128,6 +132,11 @@ def state_resume_candidate(state):
     progress = state.get('progress') if isinstance(state, dict) else {}
     if not isinstance(progress, dict):
         return False
+    if str((state.get('boox_book') or {}).get('format') or '').lower() in {'cbz','cbr'}:
+        return any((type(progress.get(key)) is int and progress[key]>=0) or
+                   (isinstance(progress.get(key),str) and re.fullmatch(r'\d+',progress[key]))
+                   for key in ('current_page_position_v3_raw','current_page_position_v2_raw',
+                               'current_page_position_v3','current_page_position_v2'))
     return any(_nonempty_position(progress.get(key)) for key in (
         'current_page_position_v3', 'current_page_position_v2', 'backend_current_page'))
 
@@ -490,11 +499,11 @@ class FrankenDialog(QDialog):
         self.excluded_book_rows = []
         self.collection_serial = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.9')
+        self.setWindowTitle('NeoMatrix — v1.4.10')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.9</b><br>'
+            '<b>NeoMatrix v1.4.10</b><br>'
             'Close your books, connect BOOX by USB, then press <b>Sync</b>. '
             'Sync keeps your farthest reading position when it can match the book. '
             'You’ll be asked before positions are sent to BOOX.'
@@ -1241,23 +1250,25 @@ class FrankenDialog(QDialog):
         if state is None:
             self.summary.setText('No saved BOOX data for this book. Run Sync first.')
             return
-        path, _ = QFileDialog.getSaveFileName(self, 'Save EPUB and BOOX reading data for diagnosis',
+        path, _ = QFileDialog.getSaveFileName(self, 'Save book and BOOX reading data for diagnosis',
             os.path.expanduser('~/Desktop/NeoMatrix-reader-diagnosis.zip'), 'ZIP archives (*.zip)')
         if not path:
             return
         def export(status):
             from calibre_plugins.frankenboox.reader_bridge import REPORT_KEY
-            epub = self.db.format_abspath(book_id, 'EPUB')
+            source_format=str((state.get('boox_book') or {}).get('format') or '').upper()
+            fmt=source_format if source_format in {'PDF','CBZ','CBR'} else 'EPUB'
+            epub = self.db.format_abspath(book_id, fmt)
             if not epub:
-                raise ValueError('The selected book has no EPUB format.')
+                raise ValueError('The selected book has no matching '+fmt+' format.')
             with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as bundle:
-                bundle.write(epub, 'book.epub')
+                bundle.write(epub, 'book.'+fmt.lower())
                 bundle.writestr('boox-neoreader-state.json', json.dumps(state, ensure_ascii=False, indent=2))
                 report = self.db.get_custom_book_data(REPORT_KEY).get(book_id, {})
                 bundle.writestr('reader-report.json', json.dumps(report, ensure_ascii=False, indent=2))
         try:
             run_background(self, 'Saving reader diagnosis ZIP…', export)
-            self.summary.setText('Saved diagnosis ZIP containing this EPUB and its BOOX reading data. You can attach it to the chat.')
+            self.summary.setText('Saved diagnosis ZIP containing this book and its BOOX reading data. You can attach it to the chat.')
         except Exception as error:
             self.summary.setText(f'Could not export reader diagnosis: {error}')
 
@@ -1444,6 +1455,21 @@ class FrankenDialog(QDialog):
                         return False
                 elif content != stream.getvalue():
                     return False
+            source_format=str((state.get('boox_book') or {}).get('format') or '').upper()
+            if source_format in {'PDF','CBZ','CBR'}:
+                fixed_path=self.db.format_abspath(book_id,source_format)
+                if fixed_path:
+                    from calibre_plugins.frankenboox.fixed_sync import FIXED_KEY
+                    from calibre_plugins.frankenboox.fixed_book import digest_file
+                    context=(self.db.get_custom_book_data(FIXED_KEY).get(book_id) or {}).get(source_format) or {}
+                    from calibre_plugins.frankenboox.reader_bridge import READER_MAPPING_VERSION
+                    return bool(report.get('format')==source_format and report.get('mapping_version')==READER_MAPPING_VERSION
+                        and context.get('calibre_sha256')==digest_file(fixed_path)
+                        and context.get('identity')==(state.get('boox_identity') or {}))
+                elif report.get('format')==source_format:
+                    from calibre_plugins.frankenboox.reader_bridge import READER_MAPPING_VERSION
+                    return bool(report.get('mapping_version')==READER_MAPPING_VERSION and
+                                report.get('resume_issue_kind')=='missing-matching-format')
             epub = self.db.format_abspath(book_id, 'EPUB')
             if epub:
                 from calibre_plugins.frankenboox.reader_bridge import READER_MAPPING_VERSION
@@ -1506,8 +1532,10 @@ class FrankenDialog(QDialog):
             if not state_resume_candidate(state) or report.get('resume'):
                 continue
             title = self.db.field_for('title', book_id) or (state.get('boox_book') or {}).get('title') or 'Book ' + str(book_id)
-            if not self.db.format_abspath(book_id, 'EPUB'):
-                issues.append(str(title) + ': reading-position conversion supports EPUB only.')
+            fmt=str((state.get('boox_book') or {}).get('format') or '').upper()
+            fmt=fmt if fmt in {'PDF','CBZ','CBR'} else 'EPUB'
+            if not self.db.format_abspath(book_id, fmt):
+                issues.append(str(title) + ': Calibre has no matching '+fmt+' file for reading-position conversion.')
             else:
                 reason = report.get('resume_issue') or 'BOOX reading position is unverified; Calibre position was kept. Reader handoff may use an older position.'
                 issues.append(str(title) + ': ' + reason)

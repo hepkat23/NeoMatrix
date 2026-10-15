@@ -24,6 +24,39 @@ def prepare_sync(owner, entries, status, device_factory=None):
         from epub_position import EpubPositionMapper
     plans, keep, issues, device, pull = [], {}, [], None, []
     for bid, current, files in entries:
+        fmt=str((current.get('boox_book') or {}).get('format') or '').upper()
+        if fmt in {'PDF','CBZ','CBR'}:
+            title=owner.db.field_for('title',bid) or str(bid)
+            try:
+                try:
+                    from calibre_plugins.frankenboox import fixed_sync
+                except ImportError:
+                    import fixed_sync
+                if device is None:
+                    if device_factory:device=device_factory()
+                    else:
+                        from calibre_plugins.frankenboox.main import find_adb
+                        adb=find_adb()
+                        if not adb:raise PushError('Connect BOOX and install Android Platform Tools')
+                        device=AdbReadingDevice(adb)
+                status('Comparing '+fmt+' pages: '+title)
+                prepared=fixed_sync.verify_book(owner.db,bid,current,device,current.get('raw_metadata_row'),status)
+                book,context,row=prepared
+                try:
+                    local=fixed_sync.calibre_position(owner.db,bid,book.path,fmt,book)
+                except ValueError as error:
+                    if str(error).startswith('No saved Calibre '):pull.append(bid);continue
+                    raise
+                if local['page_index']<context['page_index']:pull.append(bid);continue
+                if local['page_index']==context['page_index']:continue
+                keep[bid]=True
+                plan=fixed_sync.preview(owner.db,bid,current,device,prepared=prepared)
+                if plan['status']=='ready':plans.append({'book_id':bid,'title':title,'path':plan['book_path'],'plan':plan})
+                elif plan['status']!='unchanged':issues.append(title+': '+plan['reason']+'; Calibre position kept')
+            except Exception as error:
+                keep[bid]=True
+                issues.append(title+': '+str(error)+'; positions kept unchanged')
+            continue
         path = owner.db.format_abspath(bid, 'EPUB')
         if not path:
             continue
@@ -98,14 +131,24 @@ def execute_pushes(db, device, rows, folder, status):
         bid, plan, backup = row['book_id'], row['plan'], None
         try:
             status('Backing up and sending position: ' + row['title'])
-            path = db.format_abspath(bid, 'EPUB')
-            if not path or calibre_position(db, bid, path) != plan['calibre_position']:
+            fmt=plan.get('format','EPUB')
+            path = db.format_abspath(bid, fmt)
+            if fmt in {'PDF','CBZ','CBR'} and path:
+                try:
+                    from calibre_plugins.frankenboox.fixed_sync import _book_from_context,calibre_position as fixed_position
+                except ImportError:
+                    from fixed_sync import _book_from_context,calibre_position as fixed_position
+                book=_book_from_context(path,fmt,plan['fixed_format_mapping'])
+                position=fixed_position(db,bid,path,fmt,book)
+            else:
+                position=calibre_position(db,bid,path) if path else None
+            if not path or position != plan['calibre_position']:
                 raise PushError('Calibre position changed during Sync; try Sync again')
             digest = hashlib.sha256()
             with open(path, 'rb') as stream:
                 for chunk in iter(lambda: stream.read(1024 * 1024), b''):digest.update(chunk)
             if digest.hexdigest() != plan['calibre_sha256']:
-                raise PushError('Calibre EPUB changed during Sync; try Sync again')
+                raise PushError('Calibre book changed during Sync; try Sync again')
             backup = folder / ('neomatrix-position-' + uuid4().hex + '.json')
             marker = {'status': 'pending', 'serial': device.serial, 'backup': str(backup),
                       'identity': {'metadata_uuid': plan['metadata_uuid'], 'document_id': plan['document_id'],

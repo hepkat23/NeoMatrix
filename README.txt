@@ -1,4 +1,4 @@
-NeoMatrix 1.4.9 — BOOX reading data in Calibre
+NeoMatrix 1.4.10 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -32,9 +32,12 @@ WHAT WORKS
   source-position convention verified by independent BOOX text locations.
   Unverified, image/spatial, or unsupported locations are skipped with a reason.
   Highlights, typed notes and handwriting are not pushed to BOOX yet.
+- PDF, CBZ and CBR: two-way progress uses verified physical pages in the matching
+  Calibre format. The farther page wins regardless of timestamps. Original notes
+  remain archived; supported physical-page bookmarks are imported.
 - Original BOOX annotations, metadata and handwriting files are archived locally.
   Handwriting can be viewed in NeoMatrix; native editable handwriting overlays
-  and PDF/CBZ reader-location conversion are not implemented.
+  are not implemented.
 
 SAFETY AND COMPATIBILITY
 Push identifies the exact BOOX copy by document ID, record ID and path. Separate
@@ -102,7 +105,7 @@ once even when BOOX data has not changed. Remaining unsupported positions are
 listed in the sync summary, including on repeat syncs. No page turn is needed.
 
 PROGRESS CONFLICTS
-Automatic sync retains the farthest verified EPUB location across BOOX and all
+Automatic sync retains the farthest verified reading location across BOOX and all
 Calibre last-read sources, regardless of timestamps. Uncomparable locations are
 preserved and reported. Tools > Use BOOX reading position is an explicit override.
 The EPUB CFI resolver is shared with the CrossPoint SD plugin in this repository
@@ -134,5 +137,19 @@ chapters can be compared without guessing an offset inside a blank element.
 The Grimscribe X3-to-BOOX handoff was verified on a physical GoColor7_2, followed
 by a cold-open/close and native position readback; notes and bookmarks remained
 unchanged. Repeat preview reported unchanged. Older device clocks do not defeat
-farthest-position selection. This release does not add PDF or comic progress
-conversion; the current CrossPoint Calibre plugin also handles EPUB only.
+farthest-position selection. The CrossPoint Calibre plugin handles EPUB only.
+
+1.4.10 adds two-way PDF, CBZ and CBR physical-page progress. Sync checks both
+files, native page references and Calibre viewer page markers before moving a
+position. Different formats are not interchangeable. PDF page numbering stays
+physical even if the Calibre conversion omits blank pages; positions on omitted
+pages are reported as unsupported. Printed page labels may differ from counters.
+PDF smoothness and geometry rounding introduced by NeoReader is normalized
+narrowly; page content, fonts, images and reading order must still match.
+Comic ordering is restricted to the verified NeoReader build and unambiguous
+single-folder numeric page names. Other layouts/firmware are reported and kept.
+PDF parsing is bundled (pypdf 6.10.0, BSD-3-Clause); CBR uses Calibre's RAR support.
+No additional plugin or paid service is required. Device writes retain the
+existing explicit review, verified backup and conditional update protections.
+Hardware cold-open tests confirmed PDF page21, CBR page10 and CBZ page9. Isolated
+Calibre runtime tests cover both directions and newer-but-earlier positions.

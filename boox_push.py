@@ -29,14 +29,35 @@ def _values(plan):
     if plan.get('status') != 'ready':
         raise PushError('This position was not verified for push')
     raw, attrs, backend = _backend({'extraAttributes': plan['expected_extra_attributes']})
-    observed = position_object(plan['position_raw'])
+    kind=plan.get('position_kind')
+    fixed=kind in ('pdf-page','comic-page')
+    def decode(value):
+        if not fixed:return position_object(value)
+        if kind=='pdf-page':
+            value=json.loads(value) if isinstance(value,str) else value
+            if not isinstance(value,dict) or set(value)!={'pageReferenceId'} or not re.fullmatch(r'pdf-[1-9]\d*-\d+',str(value['pageReferenceId'])):
+                raise PushError('Invalid verified PDF page reference')
+            return value
+        if isinstance(value,str) and re.fullmatch(r'\d+',value):value=int(value)
+        if type(value) is not int or not 0<=value<plan.get('page_count',0):
+            raise PushError('Invalid verified comic page index')
+        return value
+    observed = decode(plan['position_raw'])
     if observed != plan['position']:
         raise PushError('Observed position changed after preview')
-    old = _resume(backend)
+    if fixed:
+        try:
+            from calibre_plugins.frankenboox.fixed_sync import resume_value
+        except ImportError:
+            from fixed_sync import resume_value
+        old=decode(resume_value(backend))
+        if not 0<=plan.get('page_index',-1)<plan.get('page_count',0):raise PushError('Verified page is out of bounds')
+    else:
+        old = _resume(backend)
     changed = []
     for key in ('current_page_position_v3', 'current_page_position_v2', 'current_page'):
-        if backend.get(key):
-            if position_object(backend[key]) != old:
+        if key in backend and backend[key] is not None and backend[key]!='':
+            if decode(backend[key]) != old:
                 raise PushError('Reader engine positions disagree')
             backend[key] = plan['position_raw'] if isinstance(backend[key], str) else observed
             changed.append(key)
@@ -207,6 +228,24 @@ class AdbReadingDevice:
             return identity_from_bytes(cp.stdout)
         except Exception as error:
             raise PushError('Could not verify BOOX EPUB reading content: ' + str(error)) from error
+
+    def copy_book_to(self,path,destination):
+        if not isinstance(path,str) or not path.startswith(('/storage/','/sdcard/')) or '\x00' in path:
+            raise PushError('Unknown BOOX book path')
+        with open(destination,'xb') as stream:
+            cp=subprocess.run([self.adb,'-s',self.serial,'exec-out','cat '+shlex.quote(path)],
+                              stdout=stream,stderr=subprocess.PIPE,timeout=180)
+        if cp.returncode or cp.stderr.strip():
+            raise PushError(cp.stderr.decode('utf-8','replace').strip() or 'Could not read BOOX book')
+
+    def reader_provider_sha256(self):
+        paths=self._shell('pm','path','com.onyx.kreader').splitlines()
+        if len(paths)!=1 or not paths[0].startswith('package:'):
+            raise PushError('NeoReader package identity is ambiguous')
+        path=paths[0][len('package:'):]
+        digest=self._shell('sha256sum',path).split()[0]
+        if not re.fullmatch(r'[0-9a-f]{64}',digest):raise PushError('NeoReader package could not be verified')
+        return digest
 
     def update(self, uuid, expected, values):
         if set(values) != {'extraAttributes', 'lastAccess'} or expected.get('uuid') != uuid:

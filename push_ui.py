@@ -18,7 +18,7 @@ class PositionPushDialog(QDialog):
         self.setWindowTitle('NeoMatrix — push reading positions to BOOX')
         self.resize(1000, 620)
         layout = QVBoxLayout(self)
-        note = QLabel('Close and save books in both readers before previewing. EPUB positions are sent only when they can be verified. '
+        note = QLabel('Close and save books in both readers before previewing. Reading positions are sent only when they can be verified. '
                       'Unsupported locations are listed below. '
                       'Selected pushes save a backup on your computer and close NeoReader. Reopen each pushed book on BOOX '
                       'to load the position and refresh its percentage before running Sync. Highlights and notes are not pushed.')
@@ -151,10 +151,10 @@ class PositionPushDialog(QDialog):
 
 def confirm_sync_pushes(owner, rows, issues):
     box = QMessageBox(owner)
-    box.setWindowTitle('Sync — send newer reading positions to BOOX?')
+    box.setWindowTitle('Sync — send farther reading positions to BOOX?')
     names = '\n'.join('• ' + row['title'] for row in rows[:8])
     if len(rows) > 8:names += '\n…and ' + str(len(rows) - 8) + ' more'
-    box.setText(f'{len(rows)} book(s) have a newer Calibre reading position that can be safely sent to BOOX.\n\n' + names)
+    box.setText(f'{len(rows)} book(s) have a farther Calibre reading position that can be safely sent to BOOX.\n\n' + names)
     box.setInformativeText('A backup is saved automatically before each change. NeoReader will close. '
                           'Reopen the pushed books on BOOX afterward. Notes and highlights are imported from BOOX only.')
     box.setDetailedText('\n'.join(row['title'] + '\nBOOX copy: ' + row['path'] for row in rows) +
