@@ -1,0 +1,16 @@
+Third-party notices
+
+pypdf 6.10.0
+Project: https://github.com/py-pdf/pypdf
+Licence: BSD-3-Clause. Full copyright notices, conditions and disclaimer are
+included unchanged in _vendor/PYPDF-LICENSE.
+Vendored Python source is included under _vendor/pypdf/.
+NeoMatrix changes (2026-10-15): internal absolute imports were converted to
+package-relative imports for Calibre's plugin namespace. Parser behaviour
+was not intentionally changed. No endorsement by pypdf's authors is implied.
+
+Runtime dependencies supplied separately by the user
+calibre: https://calibre-ebook.com/ (GPL-3.0); its Python APIs, viewer conversion
+and RAR support are used from the user's installation, not redistributed here.
+Qt/PyQt and Android Platform Tools (ADB) are also supplied separately.
+Their respective licences continue to apply.

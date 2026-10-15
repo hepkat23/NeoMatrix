@@ -166,3 +166,9 @@ This fixes normal Sync imports of PDF/CBZ/CBR without trusting changed data.
 spatial cover position no longer blocks a later verified section. Spatial
 coordinates are not converted to guessed text offsets; ambiguous positions
 within the same section remain protected. Invalid element paths are rejected.
+
+LICENCE AND PUBLIC PREVIEW
+Original NeoMatrix code: GPL-3.0-only; see LICENSE.txt and NOTICE.txt.
+Bundled pypdf: BSD-3-Clause; see THIRD_PARTY_NOTICES.txt. No warranty.
+This is an independent public preview with firmware/document limits.
+See README.md for installation, tested compatibility and known limitations.

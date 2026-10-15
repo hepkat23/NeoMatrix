@@ -1,0 +1,19 @@
+NeoMatrix
+Copyright (C) 2026 R V and NeoMatrix contributors
+
+Original NeoMatrix code is licensed under the GNU General Public License,
+version 3 only (GPL-3.0-only). See LICENSE.txt for the complete terms.
+You may use, modify and redistribute the code under those terms.
+
+NeoMatrix is distributed WITHOUT ANY WARRANTY, including implied warranties
+of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See GPL sections
+15-17 for warranty and liability terms; these do not override applicable law.
+
+The bundled pypdf library retains its BSD-3-Clause licence and copyright
+notices. See THIRD_PARTY_NOTICES.txt and _vendor/PYPDF-LICENSE.
+
+NeoMatrix is an independent project, developed with AI assistance. It is not
+affiliated with or endorsed by Onyx/BOOX, the calibre project, OpenAI or
+CrossPoint. Product names identify compatibility; they remain their owners'
+trademarks. No BOOX firmware, APK, third-party ebook, account credential or
+personal device backup is included in this distribution.
