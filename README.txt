@@ -1,4 +1,4 @@
-NeoMatrix 1.4.12 — BOOX reading data in Calibre
+NeoMatrix 1.4.13 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -161,3 +161,8 @@ tests now cover that path rather than testing only on the main thread.
 1.4.12 carries verified physical-page mappings from Sync review into separately
 prepared archive entries, only when book identity and source signature match.
 This fixes normal Sync imports of PDF/CBZ/CBR without trusting changed data.
+
+1.4.13 compares verified EPUB spine order before within-section offsets. A
+spatial cover position no longer blocks a later verified section. Spatial
+coordinates are not converted to guessed text offsets; ambiguous positions
+within the same section remain protected. Invalid element paths are rejected.

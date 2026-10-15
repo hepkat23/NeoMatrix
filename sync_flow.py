@@ -84,12 +84,11 @@ def prepare_sync(owner, entries, status, device_factory=None):
                 issues.append(title + ': ' + (portable.get('resume_issue') or 'BOOX position cannot be compared safely; no position sent'))
                 continue
             mapper = EpubPositionMapper(path)
-            local_rank = mapper.cfi_to_offset(position['cfi'])
-            device_rank = mapper.cfi_to_offset(boox['calibre_cfi'])
-            if local_rank < device_rank:
+            order = mapper.compare_cfis(position['cfi'],boox['calibre_cfi'])
+            if order < 0:
                 pull.append(bid)
                 continue
-            if local_rank == device_rank:
+            if order == 0:
                 continue
             keep[bid] = True
             if not (current.get('boox_identity') or {}).get('metadata_uuid'):

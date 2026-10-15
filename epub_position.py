@@ -203,6 +203,34 @@ class EpubPositionMapper:
             return 'epubcfi(/{}/2/4)'.format(2 * (spine_index + 1))
         raise ValueError('visible-text offset is outside this spine item')
 
+    def verified_spine(self,cfi):
+        """Validate the CFI before relying on its package reading order."""
+        spine,steps,offset,spatial=_parse_cfi(cfi)
+        if spatial is None:
+            self.cfi_to_offset(cfi)
+            return spine
+        if any(not 0<=value<=100 for value in spatial):
+            raise ValueError('Spatial reading positions have invalid coordinates')
+        node=self._chapter(spine)['root']
+        if not steps or steps[0]!=2 or offset is not None:
+            raise ValueError('Spatial reading positions have no verified element root')
+        for step in steps[1:]:
+            children=[child for child in node if isinstance(child.tag,str)]
+            if step<2 or step%2 or step//2-1>=len(children):
+                raise ValueError('Spatial reading positions have an invalid element path')
+            node=children[step//2-1]
+        return spine
+
+    def compare_cfis(self,left,right):
+        """Compare verified sections first; never estimate spatial text offsets."""
+        a,b=self.verified_spine(left),self.verified_spine(right)
+        if a!=b:return (a>b)-(a<b)
+        if left==right:return 0
+        if _parse_cfi(left)[3] is not None or _parse_cfi(right)[3] is not None:
+            raise ValueError('Spatial reading positions cannot be compared exactly within the same section')
+        x,y=self.cfi_to_offset(left),self.cfi_to_offset(right)
+        return (x>y)-(x<y)
+
     def cfi_to_offset(self, cfi):
         """Return ``(spine_index, visible_text_offset)`` or raise ValueError.
 

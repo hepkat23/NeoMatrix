@@ -61,19 +61,24 @@ def farthest_position(records, path):
             cfi = record.get('cfi') or record.get('pos')
             if not cfi:
                 continue
-            if '%' in cfi or '@' in cfi:
-                raise ValueError('Spatial reading positions cannot be compared exactly')
-            rank = mapper.cfi_to_offset(cfi)
+            rank = mapper.verified_spine(cfi)
             try:
                 when = _epoch_ms(record.get('epoch') if 'epoch' in record else record.get('timestamp'))
             except (ValueError, TypeError, OverflowError, OSError):
                 when = 0
             candidates.append((rank, when, cfi))
+        if candidates:
+            final_spine=max(item[0] for item in candidates)
+            eligible=[item for item in candidates if item[0]==final_spine]
+            best=eligible[0]
+            for candidate in eligible[1:]:
+                order=mapper.compare_cfis(candidate[2],best[2])
+                if order>0 or (order==0 and candidate[1]>best[1]):best=candidate
     finally:
         mapper.close()
     if not candidates:
         raise ValueError('No saved Calibre EPUB reading position; close the viewer after reading')
-    rank, when, cfi = max(candidates)
+    rank, when, cfi = best
     return {'cfi': cfi, 'epoch_ms': when}
 
 

@@ -110,8 +110,26 @@ class FarthestProgress(unittest.TestCase):
 
     def test_spatial_cfi_is_not_compared_using_approximate_text_order(self):
         cfi=self.cfi(0,2).rsplit('/',1)[0]+'@25:50)'
+        self.assertEqual(farthest_position([{'cfi':cfi,'epoch':2000}],self.path)['cfi'],cfi)
         with self.assertRaisesRegex(ValueError,'Spatial reading positions'):
-            farthest_position([{'cfi':cfi,'epoch':2000}],self.path)
+            self.mapper.compare_cfis(cfi,self.cfi(0,3))
+
+    def test_later_section_beats_spatial_cover_despite_older_timestamp(self):
+        cover='epubcfi(/2/2/4/2@49.94:50)'
+        later=self.cfi(1,3)
+        self.assertEqual(self.mapper.compare_cfis(later,cover),1)
+        self.assertEqual(farthest_position([{'cfi':cover,'epoch':999999},
+                                           {'cfi':later,'epoch':1}],self.path)['cfi'],later)
+        self.write_old(cover)
+        applied,_=bridge._write_sidecar_resume(self.path,{'calibre_cfi':later},'2026-10-01T00:00:00+00:00')
+        self.assertTrue(applied)
+        self.assertTrue(any(x.get('type')=='bookmark' for x in json.loads(self.sidecar.read_text())))
+
+    def test_invalid_spatial_path_does_not_win_by_later_section(self):
+        with self.assertRaisesRegex(ValueError,'invalid element path'):
+            self.mapper.compare_cfis('epubcfi(/4/2/4/9998@50:50)',self.cfi(0,2))
+        with self.assertRaisesRegex(ValueError,'invalid coordinates'):
+            self.mapper.compare_cfis('epubcfi(/4/2/4/2@50:101)',self.cfi(0,2))
 
     def test_incoming_spatial_cfi_does_not_overwrite_exact_position(self):
         self.write_old(self.cfi(0,2));before=self.sidecar.read_bytes()

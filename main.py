@@ -499,11 +499,11 @@ class FrankenDialog(QDialog):
         self.excluded_book_rows = []
         self.collection_serial = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.12')
+        self.setWindowTitle('NeoMatrix — v1.4.13')
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.12</b><br>'
+            '<b>NeoMatrix v1.4.13</b><br>'
             'Close your books, connect BOOX by USB, then press <b>Sync</b>. '
             'Sync keeps your farthest reading position when it can match the book. '
             'You’ll be asked before positions are sent to BOOX.'

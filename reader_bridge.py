@@ -423,9 +423,7 @@ def _write_sidecar_resume(epub_path, resume, timestamp, force=False, current_pos
             best = farthest_position(records, epub_path)
             mapper = EpubPositionMapper(epub_path)
             try:
-                if '%' in incoming['pos'] or '@' in incoming['pos']:
-                    raise ValueError('Spatial reading positions cannot be compared exactly')
-                if mapper.cfi_to_offset(incoming['pos']) <= mapper.cfi_to_offset(best['cfi']):
+                if mapper.compare_cfis(incoming['pos'],best['cfi']) <= 0:
                     return False, {'pos': best['cfi'], 'timestamp': datetime.fromtimestamp(best['epoch_ms']/1000, timezone.utc).isoformat(), 'pos_type': 'epubcfi'}
             finally:
                 mapper.close()
