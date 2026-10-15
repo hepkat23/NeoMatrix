@@ -1,4 +1,4 @@
-NeoMatrix 1.4.10 — BOOX reading data in Calibre
+NeoMatrix 1.4.11 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -153,3 +153,7 @@ No additional plugin or paid service is required. Device writes retain the
 existing explicit review, verified backup and conditional update protections.
 Hardware cold-open tests confirmed PDF page21, CBR page10 and CBZ page9. Isolated
 Calibre runtime tests cover both directions and newer-but-earlier positions.
+
+1.4.11 gives background workers an explicit 8 MiB stack. Calibre's native RAR
+reader exceeds the macOS Qt default stack; real worker-thread CBR regression
+tests now cover that path rather than testing only on the main thread.

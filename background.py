@@ -7,6 +7,9 @@ class Worker(QThread):
 
     def __init__(self, task, parent):
         super().__init__(parent)
+        # Calibre's native RAR opener uses over 512 KiB of stack on macOS.
+        # Qt's default worker stack can be smaller than that allocation.
+        self.setStackSize(8 * 1024 * 1024)
         self.task = task
         self.result = None
         self.error = None
