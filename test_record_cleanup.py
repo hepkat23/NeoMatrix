@@ -2,7 +2,7 @@ import copy,json,sqlite3,tempfile,unittest
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from record_cleanup import remove_records,restore_records,record_token,conditional_where,read_backup,eligible_records,write_backup
+from record_cleanup import remove_records,restore_records,record_token,conditional_where,read_backup,eligible_records,write_backup,suggested_backup_path
 from storage_cleanup import Scan,BookRecord,CleanupError
 ROW={'id':'1','uuid':'a'*32,'title':"O'Brien: 日本語",'location':'/storage/emulated/0/Books/Old.epub','progress':'3/10','readingStatus':'1','extraAttributes':'{"position":"chapter:2"}','description':None}
 class Device:
@@ -117,4 +117,20 @@ class Tests(unittest.TestCase):
  def test_case_change_cannot_match_case_insensitive_column(self):
   self.dev.db.execute("UPDATE Metadata SET title=lower(title)")
   self.assertEqual(self.dev.delete_record(self.rows[0]),0)
+class BackupPathTests(unittest.TestCase):
+ def test_suggestion_is_a_full_dated_path_in_documents(self):
+  from datetime import datetime
+  with tempfile.TemporaryDirectory() as home:
+   path=Path(suggested_backup_path('NeoMatrix-BOOX-record-backup','.json',home=home,now=datetime(2026,10,29,5,7)))
+   self.assertTrue(path.is_absolute())
+   self.assertEqual(path.parent,Path(home)/'Documents'/'NeoMatrix backups')
+   self.assertTrue(path.parent.is_dir())
+   self.assertEqual(path.name,'NeoMatrix-BOOX-record-backup-2026-10-29_0507.json')
+ def test_suggestion_never_reuses_an_existing_backup(self):
+  from datetime import datetime
+  with tempfile.TemporaryDirectory() as home:
+   when=datetime(2026,10,29,5,7)
+   first=Path(suggested_backup_path('b','.json',home=home,now=when));first.write_text('{}')
+   second=Path(suggested_backup_path('b','.json',home=home,now=when))
+   self.assertNotEqual(first,second);self.assertFalse(second.exists())
 if __name__=='__main__':unittest.main()

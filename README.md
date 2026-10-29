@@ -70,6 +70,8 @@ See [README.txt](README.txt) for technical details and the full change history.
 
 ## Recent changes
 
+- **1.4.18:** BOOX cleanup backups save to Documents/NeoMatrix backups with a
+  dated name, fixing "Read-only file system" errors on macOS.
 - **1.4.17:** books already at the same position say "Already at the same
   position" instead of claiming the farthest Calibre position was retained.
 - **1.4.16:** no more match prompts for files that aren't books (TXT reading

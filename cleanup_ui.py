@@ -6,7 +6,8 @@ from qt.core import (QAbstractItemView, QCheckBox, QDialog, QFileDialog, QHBoxLa
 from calibre_plugins.frankenboox.background import run_background
 from calibre_plugins.frankenboox.storage_cleanup import AdbDevice, clean, restore, scan_device, verify_backup
 from calibre_plugins.frankenboox.boox_files import record_token
-from calibre_plugins.frankenboox.record_cleanup import remove_records, restore_records, read_backup, eligible_records
+from calibre_plugins.frankenboox.record_cleanup import (remove_records, restore_records, read_backup, eligible_records,
+                                                        backup_folder, suggested_backup_path)
 
 
 def size_text(size):
@@ -336,7 +337,7 @@ class CleanupDialog(QDialog):
                                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         filename, _ = QFileDialog.getSaveFileName(self, 'Save cleanup backup on this computer',
-                                                 'NeoMatrix-BOOX-storage-backup.zip', 'ZIP backup (*.zip)')
+                                                 suggested_backup_path('NeoMatrix-BOOX-storage-backup', '.zip'), 'ZIP backup (*.zip)')
         if not filename:
             return
         if not filename.lower().endswith('.zip'):
@@ -352,7 +353,7 @@ class CleanupDialog(QDialog):
         self.refresh()
 
     def restore_backup(self):
-        filename, _ = QFileDialog.getOpenFileName(self, 'Choose a NeoMatrix storage backup', '', 'ZIP backup (*.zip)')
+        filename, _ = QFileDialog.getOpenFileName(self, 'Choose a NeoMatrix storage backup', str(backup_folder()), 'ZIP backup (*.zip)')
         if not filename:
             return
         try:
@@ -396,7 +397,7 @@ class CleanupDialog(QDialog):
                                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         filename, _ = QFileDialog.getSaveFileName(self, 'Save BOOX record backup',
-                                                  'NeoMatrix-BOOX-record-backup.json', 'Record backup (*.json)')
+                                                  suggested_backup_path('NeoMatrix-BOOX-record-backup', '.json'), 'Record backup (*.json)')
         if not filename: return
         if not filename.lower().endswith('.json'): filename += '.json'
         try:
@@ -409,7 +410,7 @@ class CleanupDialog(QDialog):
         self.refresh()
 
     def restore_book_records(self):
-        filename, _ = QFileDialog.getOpenFileName(self, 'Choose BOOX record backup', '', 'Record backup (*.json)')
+        filename, _ = QFileDialog.getOpenFileName(self, 'Choose BOOX record backup', str(backup_folder()), 'Record backup (*.json)')
         if not filename: return
         try:
             backup = read_backup(filename)

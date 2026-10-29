@@ -1,4 +1,4 @@
-NeoMatrix 1.4.17 — BOOX reading data in Calibre
+NeoMatrix 1.4.18 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -187,6 +187,11 @@ at the same place, Sync details say "Already at the same position" instead of
 "The farthest Calibre position was retained", which is now only shown when
 Calibre really is farther. Percentages can still differ between the two,
 because BOOX counts pages and Calibre uses its own fraction.
+
+1.4.18 fixes cleanup backups failing with "Read-only file system" on macOS.
+The save box suggested a bare filename, which pointed at the disk root, so the
+backup failed and nothing was removed. It now suggests a dated file in
+Documents/NeoMatrix backups that never reuses an existing backup name.
 
 LICENCE AND PUBLIC PREVIEW
 Original NeoMatrix code: GPL-3.0-only; see LICENSE.txt and NOTICE.txt.

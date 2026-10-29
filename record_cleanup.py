@@ -58,6 +58,29 @@ def eligible_records(scan, tokens):
     return rows
 
 
+def backup_folder(home=None):
+    """Where NeoMatrix suggests saving cleanup backups."""
+    return Path(home or Path.home()) / 'Documents' / 'NeoMatrix backups'
+
+
+def suggested_backup_path(stem, suffix, home=None, now=None):
+    """Full, unused, dated path for a new backup.
+
+    Calibre's working directory is the read-only disk root on macOS, so a bare
+    filename in a save dialog would point there.
+    """
+    from datetime import datetime
+    folder = backup_folder(home)
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = (now or datetime.now()).strftime('%Y-%m-%d_%H%M')
+    path = folder / ('%s-%s%s' % (stem, stamp, suffix))
+    number = 2
+    while path.exists():
+        path = folder / ('%s-%s-%d%s' % (stem, stamp, number, suffix))
+        number += 1
+    return str(path)
+
+
 def write_backup(path, serial, rows):
     payload={'serial':serial,'records':rows}
     raw=json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
