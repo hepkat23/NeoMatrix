@@ -5,7 +5,7 @@ and sending verified reading positions back over USB.
 
 ## Download and install
 
-Download **NeoMatrix_v1.4.13.zip** from the [release page](https://github.com/hepkat23/NeoMatrix/releases/tag/v1.4.13).
+Download the latest **NeoMatrix_v*.zip** from the [releases page](https://github.com/hepkat23/NeoMatrix/releases/latest).
 In Calibre, choose **Preferences → Plugins → Load plugin from file**, select
 that ZIP, then restart Calibre. The GitHub source-code ZIP is not the installer.
 
@@ -19,6 +19,8 @@ cloud account or additional Calibre plugin is required.
 2. Connect and unlock BOOX, then open **NeoMatrix → Sync** in Calibre.
 3. Review any proposed positions before sending them to BOOX.
 4. Reopen and close a pushed book in NeoReader to load its new position.
+   Until you do, that book is skipped and named in Sync details; the rest of
+   your library still syncs.
 
 The farther **verified** position wins, regardless of timestamps. If a book's
 position cannot be mapped safely, NeoMatrix keeps existing positions and tells
@@ -64,4 +66,11 @@ Onyx/BOOX, calibre, OpenAI or CrossPoint. It ships no proprietary BOOX software,
 books, credentials or device backups. The licence is not a promise of immunity
 from legal claims.
 
-See [README.txt](README.txt) for technical details and change history.
+See [README.txt](README.txt) for technical details and the full change history.
+
+## Recent changes
+
+- **1.4.14:** one pushed book you haven't reopened yet no longer stops the whole
+  Sync. It's skipped and named in Sync details; everything else syncs.
+- **1.4.13:** verified EPUB section order is compared before offsets inside a
+  section, so a spatial cover position no longer blocks a later section.

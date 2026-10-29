@@ -1,4 +1,4 @@
-NeoMatrix 1.4.13 — BOOX reading data in Calibre
+NeoMatrix 1.4.14 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -166,6 +166,12 @@ This fixes normal Sync imports of PDF/CBZ/CBR without trusting changed data.
 spatial cover position no longer blocks a later verified section. Spatial
 coordinates are not converted to guessed text offsets; ambiguous positions
 within the same section remain protected. Invalid element paths are rejected.
+
+1.4.14 no longer stops the whole Sync when one pushed book has not been
+reopened in NeoReader yet. That book sits out the Sync (no import, restore or
+new push) and is named in Sync details; all other books sync normally. The
+test suite also stops one test file leaking a fake plugin package into the
+others, which had made nine tests fail only when the full suite ran together.
 
 LICENCE AND PUBLIC PREVIEW
 Original NeoMatrix code: GPL-3.0-only; see LICENSE.txt and NOTICE.txt.
