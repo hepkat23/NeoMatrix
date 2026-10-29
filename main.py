@@ -1333,7 +1333,12 @@ class FrankenDialog(QDialog):
             lines += ['', heading]
             for book_id, report in items:
                 title = self.db.field_for('title', book_id) or str(book_id)
-                position = 'Updated in Calibre' if report.get('resume_applied') else ('Existing Calibre position kept' if report.get('resume') else 'Reading position could not be synced')
+                if report.get('resume_applied'):
+                    position = 'Updated in Calibre'
+                elif report.get('resume_matches'):
+                    position = 'Already at the same position'
+                else:
+                    position = 'Existing Calibre position kept' if report.get('resume') else 'Reading position could not be synced'
                 if not report.get('resume'):
                     position = {'image-only-start':'Cover or title page; Calibre position kept',
                                 'different-formats':'Different formats; Calibre position kept'}.get(report.get('resume_issue_kind'), position)

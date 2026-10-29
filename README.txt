@@ -1,4 +1,4 @@
-NeoMatrix 1.4.16 — BOOX reading data in Calibre
+NeoMatrix 1.4.17 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -181,6 +181,12 @@ format no Calibre book has (reading lists, notes and exports saved as TXT, for
 example) are left unmatched without a prompt. "Leave unmatched" is now
 remembered, including BOOX's duplicate copies of the same file, and the match
 dialog only lists Calibre books in the file's format.
+
+1.4.17 reports matching positions honestly. When BOOX and Calibre are already
+at the same place, Sync details say "Already at the same position" instead of
+"The farthest Calibre position was retained", which is now only shown when
+Calibre really is farther. Percentages can still differ between the two,
+because BOOX counts pages and Calibre uses its own fraction.
 
 LICENCE AND PUBLIC PREVIEW
 Original NeoMatrix code: GPL-3.0-only; see LICENSE.txt and NOTICE.txt.

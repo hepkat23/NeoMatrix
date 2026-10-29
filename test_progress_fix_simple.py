@@ -63,14 +63,14 @@ class StandardProgressWriteTests(unittest.TestCase):
         self.cfi = 'epubcfi(/6/2!/4/2/1:50)'
         self.timestamp = '2026-09-30T00:00:00+00:00'
 
-    def integrate(self, progress, applied=True, resume=True, **choices):
+    def integrate(self, progress, applied=True, resume=True, same=False, **choices):
         portable = {'resume': {'calibre_cfi': self.cfi, 'timestamp': self.timestamp}
                     if resume else None, 'annotations': []}
         with patch.object(library_push, 'calibre_position', side_effect=ValueError('No saved Calibre EPUB reading position')), \
                 patch.object(bridge, 'load_book'), \
                 patch.object(bridge, 'convert', return_value=([], portable, [])), \
                 patch.object(bridge, '_write_sidecar_resume',
-                             return_value=(applied, None if applied else {'pos': 'previous'})) as sidecar:
+                             return_value=(applied, None if applied else {'pos': 'previous', 'same': same})) as sidecar:
             report = bridge._integrate_reader(self.db, 7, {'progress': progress}, **choices)
         return report, sidecar
 
@@ -102,6 +102,17 @@ class StandardProgressWriteTests(unittest.TestCase):
         report, _ = self.integrate({'raw': '50/100'}, applied=False)
         self.db.set_last_read_position.assert_not_called()
         self.assertFalse(report['resume_applied'])
+
+    def test_equal_position_is_reported_as_matching_not_retained(self):
+        report, _ = self.integrate({'raw': '50/100'}, applied=False, same=True)
+        self.db.set_last_read_position.assert_not_called()
+        self.assertTrue(report['resume_matches'])
+        self.assertFalse(any('farthest' in item for item in report['skipped']))
+
+    def test_farther_calibre_position_is_still_reported_as_retained(self):
+        report, _ = self.integrate({'raw': '50/100'}, applied=False, same=False)
+        self.assertFalse(report['resume_matches'])
+        self.assertTrue(any('farthest Calibre position was retained' in item for item in report['skipped']))
 
     def test_keep_choice_retains_calibre_position(self):
         report, sidecar = self.integrate({'raw': '50/100'}, keep_boox_position=True)

@@ -70,6 +70,8 @@ See [README.txt](README.txt) for technical details and the full change history.
 
 ## Recent changes
 
+- **1.4.17:** books already at the same position say "Already at the same
+  position" instead of claiming the farthest Calibre position was retained.
 - **1.4.16:** no more match prompts for files that aren't books (TXT reading
   lists, notes, exports). "Leave unmatched" is remembered, including BOOX's
   duplicate copies, and the dialog only lists books in the same format.

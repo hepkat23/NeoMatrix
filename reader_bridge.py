@@ -398,8 +398,10 @@ def _timestamp_seconds(value):
 def _write_sidecar_resume(epub_path, resume, timestamp, force=False, current_position=None):
     """Persist one viewer resume position and report whether it won.
 
-    Returns ``(applied, displaced_last_read)``.  The write is atomic and keeps
-    every existing viewer highlight/bookmark entry intact.
+    Returns ``(applied, displaced_last_read)``.  When not applied, the returned
+    entry has ``same`` set if Calibre already holds this exact position rather
+    than a farther one.  The write is atomic and keeps every existing viewer
+    highlight/bookmark entry intact.
     """
     path = _viewer_sidecar_path(epub_path)
     entries = _sidecar_entries(path)
@@ -423,8 +425,10 @@ def _write_sidecar_resume(epub_path, resume, timestamp, force=False, current_pos
             best = farthest_position(records, epub_path)
             mapper = EpubPositionMapper(epub_path)
             try:
-                if mapper.compare_cfis(incoming['pos'],best['cfi']) <= 0:
-                    return False, {'pos': best['cfi'], 'timestamp': datetime.fromtimestamp(best['epoch_ms']/1000, timezone.utc).isoformat(), 'pos_type': 'epubcfi'}
+                order = mapper.compare_cfis(incoming['pos'],best['cfi'])
+                if order <= 0:
+                    return False, {'pos': best['cfi'], 'timestamp': datetime.fromtimestamp(best['epoch_ms']/1000, timezone.utc).isoformat(), 'pos_type': 'epubcfi',
+                                   'same': order == 0}
             finally:
                 mapper.close()
 
@@ -572,6 +576,7 @@ def _integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_pos
     annotations, portable, skipped = convert(state,book)
     resume_applied = False
     resume_retained = False
+    resume_matches = False
     resume_kept_by_choice = False
     if use_boox_position and portable['resume']:
         current_map = db.annotations_map_for_book(book_id, 'EPUB', user_type='local', user='viewer')
@@ -610,7 +615,8 @@ def _integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_pos
                 apply_timestamp or (state.get('progress') or {}).get('last_access_ms'),
                 force=use_boox_position, current_position=current_position,
             )
-            resume_retained = not resume_applied and previous is not None
+            resume_matches = not resume_applied and bool(previous and previous.get('same'))
+            resume_retained = not resume_applied and previous is not None and not resume_matches
             if use_boox_position and previous and previous.get('pos') != portable['resume']['calibre_cfi']:
                 old_pos = previous.get('pos')
                 if old_pos:
@@ -649,7 +655,7 @@ def _integrate_reader(db, book_id, state, use_boox_position=False, keep_boox_pos
     elif portable['resume'] and resume_retained:
         skipped.append('The farthest Calibre position was retained. Use Tools → Use BOOX reading position to apply the BOOX position explicitly.')
     report = {'mapping_version':READER_MAPPING_VERSION, 'mapped':len(portable['annotations']), 'resume':bool(portable['resume']),
-              'resume_applied':resume_applied, 'resume_issue':portable.get('resume_issue'),
+              'resume_applied':resume_applied, 'resume_matches':resume_matches, 'resume_issue':portable.get('resume_issue'),
               'resume_issue_kind':portable.get('resume_issue_kind'), 'skipped':skipped}
     db.add_custom_book_data(ANCHOR_KEY,{book_id:portable},delete_first=False)
     db.add_custom_book_data(REPORT_KEY,{book_id:report},delete_first=False)
