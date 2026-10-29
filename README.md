@@ -70,6 +70,8 @@ See [README.txt](README.txt) for technical details and the full change history.
 
 ## Recent changes
 
+- **1.4.15:** the NeoMatrix window shows the real installed version (it was
+  stuck saying 1.4.13).
 - **1.4.14:** one pushed book you haven't reopened yet no longer stops the whole
   Sync. It's skipped and named in Sync details; everything else syncs.
 - **1.4.13:** verified EPUB section order is compared before offsets inside a

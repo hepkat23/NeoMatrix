@@ -5,6 +5,6 @@ class FrankenBOOXSyncPlugin(InterfaceActionBase):
     description = 'BOOX reading data archive and Calibre library integration'
     supported_platforms = ['osx', 'windows', 'linux']
     author = 'R V'
-    version = (1, 4, 14)
+    version = (1, 4, 15)
     minimum_calibre_version = (7, 0, 0)
     actual_plugin = 'calibre_plugins.frankenboox.ui:FrankenBOOXSyncAction'

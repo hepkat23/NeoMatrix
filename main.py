@@ -499,11 +499,14 @@ class FrankenDialog(QDialog):
         self.excluded_book_rows = []
         self.collection_serial = None
 
-        self.setWindowTitle('NeoMatrix — v1.4.13')
+        # Read the version from the plugin itself so the window can't go stale.
+        from calibre_plugins.frankenboox import FrankenBOOXSyncPlugin
+        version = '.'.join(str(part) for part in FrankenBOOXSyncPlugin.version)
+        self.setWindowTitle('NeoMatrix — v' + version)
         self.resize(1180, 720)
         lay = QVBoxLayout(self)
         note = QLabel(
-            '<b>NeoMatrix v1.4.13</b><br>'
+            '<b>NeoMatrix v' + version + '</b><br>'
             'Close your books, connect BOOX by USB, then press <b>Sync</b>. '
             'Sync keeps your farthest reading position when it can match the book. '
             'You’ll be asked before positions are sent to BOOX.'
