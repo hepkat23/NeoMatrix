@@ -17,6 +17,24 @@ from unittest.mock import patch
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).parent
+
+
+def _plugin_modules():
+    return {k: v for k, v in sys.modules.items()
+            if k == 'calibre_plugins' or k.startswith('calibre_plugins.')}
+
+
+def _use_plugin_modules(modules):
+    for k in list(sys.modules):
+        if k == 'calibre_plugins' or k.startswith('calibre_plugins.'):
+            del sys.modules[k]
+    sys.modules.update(modules)
+
+
+# The fake plugin package below must only exist while this file's tests run.
+# Test discovery imports every test file first, so leaving it registered would
+# make other suites import a second, unpatched copy of the plugin modules.
+_ORIGINAL_PLUGIN_MODULES = _plugin_modules()
 for name in ('calibre_plugins', 'calibre_plugins.frankenboox'):
     package = ModuleType(name)
     package.__path__ = [str(ROOT)]
@@ -55,6 +73,16 @@ environment['QMessageBox'] = SimpleNamespace(
     warning=lambda *args: messages.append(args), information=lambda *args: messages.append(args),
     critical=lambda *args: messages.append(args))
 exec(compile(ast.Module(body=definitions, type_ignores=[]), str(ROOT / 'main.py'), 'exec'), environment)
+_TEST_PLUGIN_MODULES = _plugin_modules()
+_use_plugin_modules(_ORIGINAL_PLUGIN_MODULES)
+
+
+def setUpModule():
+    _use_plugin_modules(_TEST_PLUGIN_MODULES)
+
+
+def tearDownModule():
+    _use_plugin_modules(_ORIGINAL_PLUGIN_MODULES)
 
 
 class FakeDB:
