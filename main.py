@@ -33,6 +33,8 @@ from calibre_plugins.frankenboox.background import run_background
 
 prefs = JSONConfig('plugins/frankenboox_sync')
 prefs.defaults['manual_matches'] = {}
+# BOOX records the user chose to leave unmatched: key -> {'md5', 'name'}.
+prefs.defaults['skipped_boox_records'] = {}
 prefs.defaults['excluded_book_records'] = {}
 
 KEY_RE = re.compile(r', (?=[A-Za-z_][A-Za-z0-9_]*=)')
@@ -930,7 +932,18 @@ class FrankenDialog(QDialog):
             return min(scored[0][0], 89), scored[0][1]
         return scored[0] if scored else (0, None)
 
+    def _same_format_choices(self, br, recs, suggested=None):
+        """Only offer Calibre books in this file's format; others can never sync."""
+        fmt = (br.get('type') or '').lower()
+        if not fmt:
+            return recs, suggested
+        recs = [cr for cr in recs if fmt in cr['formats']]
+        if suggested is not None and fmt not in suggested['formats']:
+            suggested = None
+        return recs, suggested
+
     def _manual_pick(self, br, recs, suggested=None):
+        recs, suggested = self._same_format_choices(br, recs, suggested)
         items, seen = [], set()
         if suggested: items.append(suggested); seen.add(suggested['id'])
         nt = norm(br.get('title') or br.get('name') or '')
@@ -969,6 +982,8 @@ class FrankenDialog(QDialog):
 
     def _match_books(self):
         recs = self._calibre_records(); by_id={r['id']:r for r in recs}; manual=dict(prefs['manual_matches'] or {}); self.matches={}
+        skipped=dict(prefs['skipped_boox_records'] or {})
+        skipped_md5={value.get('md5') for value in skipped.values() if isinstance(value, dict) and value.get('md5')}
         active_rows=[r for r in self.boox_rows if r.get('lastAccess') not in (None,'','0') or r.get('progress') not in (None,'','0/0') or self._annotations_for(r) or self._bookmarks_for(r)]
         for br in active_rows:
             key=stable_boox_key(br); match={'book_id':None,'method':'unmatched','confidence':0}; remembered=manual.get(key)
@@ -999,15 +1014,28 @@ class FrankenDialog(QDialog):
                     if len(exact) == 1:
                         match={'book_id':exact[0],'method':'exact file MD5','confidence':100}
             if match['book_id'] is None:
-                score,cr=self._best_fallback(br,recs)
-                if cr is not None and score>=90: match={'book_id':cr['id'],'method':'exact title + author','confidence':score}
+                fmt=(br.get('type') or '').lower(); target_md5=boox_md5(br)
+                if fmt and not any(fmt in cr['formats'] for cr in recs):
+                    # Notes, reading lists and exports: nothing in Calibre to match.
+                    match['method']='no Calibre book in this format'
+                elif key in skipped or (target_md5 and target_md5 in skipped_md5):
+                    # Covers BOOX's duplicate copies of a file already skipped.
+                    match['method']='left unmatched (remembered)'
                 else:
-                    picked=self._manual_pick(br,recs,suggested=cr)
-                    if picked['cancel']: raise RuntimeError('Analysis cancelled by user.')
-                    if picked['id'] is not None:
-                        match={'book_id':picked['id'],'method':'manual match','confidence':100}; manual[key]=int(picked['id'])
+                    score,cr=self._best_fallback(br,recs)
+                    if cr is not None and score>=90: match={'book_id':cr['id'],'method':'exact title + author','confidence':score}
+                    else:
+                        picked=self._manual_pick(br,recs,suggested=cr)
+                        if picked['cancel']: raise RuntimeError('Analysis cancelled by user.')
+                        if picked['id'] is not None:
+                            match={'book_id':picked['id'],'method':'manual match','confidence':100}; manual[key]=int(picked['id'])
+                        else:
+                            match['method']='left unmatched'
+                            skipped[key]={'md5':target_md5,'name':br.get('title') or br.get('name') or ''}
+                            if target_md5: skipped_md5.add(target_md5)
             self.matches[key]={'boox':br,**match}
         prefs['manual_matches']=manual
+        prefs['skipped_boox_records']=skipped
 
     def _carry_forward_unchanged_handwriting(self):
         """Safely reuse archived ReaderNote metadata only when handwriting bytes are unchanged.

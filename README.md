@@ -70,6 +70,9 @@ See [README.txt](README.txt) for technical details and the full change history.
 
 ## Recent changes
 
+- **1.4.16:** no more match prompts for files that aren't books (TXT reading
+  lists, notes, exports). "Leave unmatched" is remembered, including BOOX's
+  duplicate copies, and the dialog only lists books in the same format.
 - **1.4.15:** the NeoMatrix window shows the real installed version (it was
   stuck saying 1.4.13).
 - **1.4.14:** one pushed book you haven't reopened yet no longer stops the whole

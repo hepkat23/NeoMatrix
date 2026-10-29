@@ -1,4 +1,4 @@
-NeoMatrix 1.4.15 — BOOX reading data in Calibre
+NeoMatrix 1.4.16 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -175,6 +175,12 @@ others, which had made nine tests fail only when the full suite ran together.
 
 1.4.15 shows the installed plugin version in the NeoMatrix window. The title
 and header were hard-coded and still said 1.4.13 after updating to 1.4.14.
+
+1.4.16 stops asking about BOOX files that aren't Calibre books. Files in a
+format no Calibre book has (reading lists, notes and exports saved as TXT, for
+example) are left unmatched without a prompt. "Leave unmatched" is now
+remembered, including BOOX's duplicate copies of the same file, and the match
+dialog only lists Calibre books in the file's format.
 
 LICENCE AND PUBLIC PREVIEW
 Original NeoMatrix code: GPL-3.0-only; see LICENSE.txt and NOTICE.txt.
