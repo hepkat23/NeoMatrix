@@ -79,17 +79,21 @@ def prepare_sync(owner, entries, status, device_factory=None):
             book = load_book(path)
             _, portable, _ = convert(current, book)
             boox = portable.get('resume')
-            if not boox:
+            # A book opened on BOOX but still on its image-only cover is at the
+            # very start, so any Calibre position is farther: offer it as a push.
+            at_cover = not boox and portable.get('resume_issue_kind') == 'image-only-start'
+            if not boox and not at_cover:
                 keep[bid] = True
                 issues.append(title + ': ' + (portable.get('resume_issue') or 'BOOX position cannot be compared safely; no position sent'))
                 continue
-            mapper = EpubPositionMapper(path)
-            order = mapper.compare_cfis(position['cfi'],boox['calibre_cfi'])
-            if order < 0:
-                pull.append(bid)
-                continue
-            if order == 0:
-                continue
+            if not at_cover:
+                mapper = EpubPositionMapper(path)
+                order = mapper.compare_cfis(position['cfi'],boox['calibre_cfi'])
+                if order < 0:
+                    pull.append(bid)
+                    continue
+                if order == 0:
+                    continue
             keep[bid] = True
             if not (current.get('boox_identity') or {}).get('metadata_uuid'):
                 issues.append(title + ': BOOX copy identity is missing; Calibre position kept')

@@ -88,11 +88,11 @@ class FarthestProgress(unittest.TestCase):
     def test_same_chapter_unicode_offset_ordering(self):
         self.write_old(self.cfi(0,8));before=self.sidecar.read_bytes()
         self.assertFalse(bridge._write_sidecar_resume(self.path,{'calibre_cfi':self.cfi(0,2)},'2026-10-02T00:00:00+00:00')[0]);self.assertEqual(self.sidecar.read_bytes(),before)
-    def review(self,local,device):
+    def review(self,local,device,issue_kind=None):
         owner=SimpleNamespace(db=SimpleNamespace(format_abspath=lambda *a:str(self.path),field_for=lambda *a:'Book'))
         state={'boox_identity':{'metadata_uuid':'test'},'raw_metadata_row':{}}
         entries=[(7,state,{})]
-        portable={'resume':{'calibre_cfi':device} if device else None}
+        portable={'resume':{'calibre_cfi':device} if device else None,'resume_issue_kind':issue_kind}
         with patch.object(sync_flow,'calibre_position',return_value={'cfi':local,'epoch_ms':1000}), patch.object(bridge,'load_book'), patch.object(bridge,'convert',return_value=([],portable,[])), patch.object(sync_flow,'preview',return_value={'status':'ready','book_path':'/book.epub'}):
             return sync_flow.prepare_sync(owner,entries,lambda *a:None,device_factory=lambda:object())
     def test_review_imports_farther_boox_regardless_of_time(self):
@@ -101,6 +101,8 @@ class FarthestProgress(unittest.TestCase):
         result=self.review(self.cfi(1,1),self.cfi(0,2));self.assertTrue(result['keep'][7]);self.assertEqual(len(result['plans']),1)
     def test_review_never_pushes_over_unmapped_boox_position(self):
         result=self.review(self.cfi(1,1),None);self.assertTrue(result['keep'][7]);self.assertEqual(result['plans'],[])
+    def test_review_pushes_calibre_position_to_a_book_still_on_its_cover(self):
+        result=self.review(self.cfi(1,1),None,'image-only-start');self.assertTrue(result['keep'][7]);self.assertEqual(len(result['plans']),1);self.assertEqual(result['pull'],[])
     def test_review_equal_locations_do_not_push(self):
         result=self.review(self.cfi(0,8),self.cfi(0,8));self.assertEqual(result['plans'],[])
 

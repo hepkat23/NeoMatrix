@@ -123,5 +123,71 @@ class ReversePositionTests(unittest.TestCase):
         self.assertEqual(slot['source_offset'], self.one.decode().index('Alpha'))
 
 
+class DeviceRootRuleTests(ReversePositionTests.__bases__[0]):
+    """Books with no BOOX highlights use the device-verified root-index rule."""
+    setUp = ReversePositionTests.setUp
+    position = ReversePositionTests.position
+    plan = ReversePositionTests.plan
+
+    def at_cover(self):
+        # Opened on BOOX, never past the start: chapter bounds only, no text path.
+        cover = {'chapterIndex': 0, 'chapterID': 'one', 'chapterStartPosition': 0,
+                 'chapterEndPosition': len(self.one), 'nodePosition': 0, 'textOffset': 0, 'xpath': []}
+        self.book.xpath_modes = set()
+        self.state['annotations']['active'] = []
+        self.state['progress']['current_page_position_v3'] = cover
+        attrs = json.loads(self.row['extraAttributes'])
+        attrs['backend']['current_page_position_v3'] = json.dumps(cover)
+        self.row['extraAttributes'] = json.dumps(attrs)
+        self.state['raw_metadata_row'] = copy.deepcopy(self.row)
+        return cover
+
+    def test_root_index_follows_the_chapter_prolog(self):
+        from reader_reverse import native_root_index
+        cases = {b'<html>': 0,
+                 b"<?xml version='1.0' encoding='utf-8'?><html>": 1,
+                 b"<?xml version='1.0' encoding='utf-8'?>\n<html>": 1,
+                 b'<?xml version="1.0"?>\n<!DOCTYPE html>\n<html>': 3,
+                 b'<!DOCTYPE html><html>': None,
+                 b'<!-- note --><html>': None}
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(native_root_index(raw), expected)
+
+    def test_book_without_highlights_pushes_from_its_cover(self):
+        self.at_cover()
+        plan = self.plan()
+        self.assertEqual(plan['status'], 'ready', plan)
+        self.assertEqual(plan['position']['chapterID'], 'two')
+        self.assertEqual(plan['position']['xpath'][0], 0)
+        self.assertEqual(plan['position']['nodePosition'], self.two.decode().index('Gamma'))
+
+    def test_observed_position_contradicting_the_rule_blocks_conversion(self):
+        self.at_cover()
+        # A real text position whose document root disagrees with this prolog.
+        self.state['annotations']['active'] = [{'document_id': 'doc', 'location_begin': self.beta}]
+        self.assertEqual(self.plan()['status'], 'unsupported')
+
+    def test_unverified_prolog_blocks_conversion(self):
+        self.at_cover()
+        two = b'<!DOCTYPE html>' + self.two
+        with zipfile.ZipFile(self.path, 'w') as archive:
+            archive.writestr('META-INF/container.xml', '<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>')
+            archive.writestr('OPS/book.opf', '<package><manifest><item id="one" href="one.xhtml"/><item id="two" href="two.xhtml"/></manifest><spine><itemref idref="one"/><itemref idref="two"/></spine></package>')
+            archive.writestr('OPS/one.xhtml', self.one)
+            archive.writestr('OPS/two.xhtml', two)
+        self.book.digest = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        self.state['epub_sha256'] = self.book.digest
+        self.assertEqual(plan_position(self.state, self.book, self.row,
+                                       {'cfi': 'epubcfi(/4/2/4/2/1:3)', 'epoch_ms': 1}, self.book.digest)['status'],
+                         'unsupported')
+
+    def test_no_boox_position_at_all_blocks_conversion(self):
+        self.at_cover()
+        self.state['progress'] = {'last_access_ms': 9000}
+        with self.assertRaisesRegex(ValueError, 'open the book once'):
+            NativeSource(self.path, self.book, self.state)
+
+
 if __name__ == '__main__':
     unittest.main()

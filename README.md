@@ -70,6 +70,9 @@ See [README.txt](README.txt) for technical details and the full change history.
 
 ## Recent changes
 
+- **1.4.19:** start a book elsewhere (e.g. KOReader), open it once on BOOX, and
+  Sync can send your position even though BOOX is still on the cover and the
+  book has no BOOX highlights. Verified on the Go Color 7 Gen II only.
 - **1.4.18:** BOOX cleanup backups save to Documents/NeoMatrix backups with a
   dated name, fixing "Read-only file system" errors on macOS.
 - **1.4.17:** books already at the same position say "Already at the same

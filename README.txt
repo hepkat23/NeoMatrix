@@ -1,4 +1,4 @@
-NeoMatrix 1.4.18 — BOOX reading data in Calibre
+NeoMatrix 1.4.19 — BOOX reading data in Calibre
 
 INSTALL
 Install the plugin ZIP in Calibre: Preferences > Plugins > Load plugin from file.
@@ -192,6 +192,17 @@ because BOOX counts pages and Calibre uses its own fraction.
 The save box suggested a bare filename, which pointed at the disk root, so the
 backup failed and nothing was removed. It now suggests a dated file in
 Documents/NeoMatrix backups that never reuses an existing backup name.
+
+1.4.19 can send a Calibre position (for example one synced from KOReader) to an
+EPUB that BOOX has only opened to its cover, without BOOX highlights. Reverse
+conversion previously needed this book's highlights to learn NeoReader's DOM
+numbering. NeoReader's index for <html> follows the chapter prolog (nothing: 0;
+XML declaration: 1; XML declaration and DOCTYPE: 3), verified on a Go Color 7
+Gen II against 210 native positions in every synced EPUB. Other prolog shapes
+are refused, every observed BOOX position must still agree with the rule and
+the EPUB's chapter bounds, and the result must round-trip to the exact CFI.
+Sync now treats an image-only cover as the start of the book and offers the
+Calibre position as a push instead of skipping it.
 
 LICENCE AND PUBLIC PREVIEW
 Original NeoMatrix code: GPL-3.0-only; see LICENSE.txt and NOTICE.txt.

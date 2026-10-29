@@ -18,6 +18,38 @@ def units(value):
     return len(value.encode('utf-16-le')) // 2
 
 
+# NeoReader's index for <html> among the document's top-level nodes, keyed by
+# what precedes <html> in the raw chapter source. The XML declaration (with the
+# whitespace right after it) counts as one node. Verified on a Go Color 7 Gen II
+# (provider 539b26bd…) against 210 native positions in every synced EPUB; any
+# other prolog shape is unverified and refused.
+NATIVE_ROOT_INDEX = {
+    (): 0,
+    ('xml',): 1,
+    ('xml', 'doctype', 'space'): 3,
+}
+_PROLOG = re.compile(rb'(<\?xml\b[^>]*\?>\s*)|(<!DOCTYPE[^>]*>)|(<!--.*?-->)|(<\?[^>]*\?>)|(\s+)', re.S | re.I)
+
+
+def native_root_index(raw):
+    """NeoReader's top-level index of <html> for this chapter, or None if unverified."""
+    end = raw.lower().find(b'<html')
+    if end < 0:
+        return None
+    shape, position = [], 0
+    while position < end:
+        match = _PROLOG.match(raw, position, end)
+        if not match:
+            return None
+        shape.append(('xml', 'doctype', 'comment', 'pi', 'space')[match.lastindex - 1])
+        position = match.end()
+    return NATIVE_ROOT_INDEX.get(tuple(shape))
+
+
+def native_route(route, root_index):
+    return (root_index,) + tuple(route[1:])
+
+
 class SourceChapter:
     def __init__(self, raw):
         if raw.startswith(b'\xef\xbb\xbf'):
@@ -104,9 +136,10 @@ class NativeSource:
         self.book = book
         self.chapters = []
         self.verified = False
-        # Only a uniquely calibrated, directly inspected raw DOM convention.
-        if book.xpath_modes != {'document0'}:
-            raise ValueError('Native reverse DOM convention is not uniquely verified')
+        # Highlights can calibrate the raw DOM convention for this book. Without
+        # them, the device-verified root-index rule is used, and every observed
+        # BOOX position must still agree with it and with the EPUB structure.
+        self.calibrated = book.xpath_modes == {'document0'}
         with zipfile.ZipFile(path) as archive:
             rootfile = ET.fromstring(archive.read('META-INF/container.xml')).find('.//{*}rootfile').get('full-path')
             root = ET.fromstring(archive.read(rootfile))
@@ -151,7 +184,14 @@ class NativeSource:
         for position in observed:
             chapter = self.chapter(position)
             route = tuple(position.get('xpath') or [])
+            if not route:
+                # Chapter bounds alone (e.g. an image-only cover) are still checked above.
+                continue
             source = self.source(chapter)
+            if not self.calibrated:
+                if route[0] != self.root_index(chapter):
+                    raise ValueError('Observed native document root differs')
+                route = native_route(route, 1)
             slot = source.by_route.get(route)
             if slot:
                 if position.get('nodePosition') != slot['source_offset']:
@@ -165,9 +205,19 @@ class NativeSource:
                     raise ValueError('Observed native element coordinate differs')
             else:
                 raise ValueError('Observed native source path differs')
-        if len(evidence) < 2:
+        if self.calibrated and len(evidence) < 2:
             raise ValueError('Two independent native text nodes are required for source calibration')
+        if not self.calibrated and not observed:
+            raise ValueError('No BOOX position confirms this EPUB structure; open the book once on BOOX')
         self.verified = True
+
+    def root_index(self, chapter):
+        if self.calibrated:
+            return 1
+        index = native_root_index(chapter['raw'])
+        if index is None:
+            raise ValueError('Native document root for this chapter is not verified')
+        return index
 
     def source(self, chapter):
         if chapter['source'] is None:
@@ -197,14 +247,24 @@ class NativeSource:
         offset = int(match[3])
         if not slot or not 0 <= offset < units(slot['text']):
             raise ValueError('CFI text offset exceeds the source text slot')
+        root = self.root_index(chapter)
         position = {'chapterIndex': index, 'chapterID': chapter['id'],
                     'chapterStartPosition': chapter['start'], 'chapterEndPosition': chapter['end'],
-                    'nodePosition': slot['source_offset'], 'textOffset': offset, 'xpath': list(slot['route'])}
-        anchor = self.book.position(position)
+                    'nodePosition': slot['source_offset'], 'textOffset': offset,
+                    'xpath': list(native_route(slot['route'], root))}
+        # Round-trip through the forward mapper in the same root convention.
+        modes = self.book.xpath_modes
+        if not self.calibrated:
+            self.book.xpath_modes = {'document0' if root == 1 else 'document0prefix%d' % root}
+        try:
+            anchor = self.book.position(position)
+        finally:
+            self.book.xpath_modes = modes
         if not anchor or anchor.get('calibre_cfi') != cfi:
             raise ValueError('Reverse position failed its exact CFI round trip')
         return {'position': position, 'raw_position': json.dumps(position, separators=(',', ':')),
-                'anchor': anchor, 'cfi': cfi, 'method': 'verified-source-dom'}
+                'anchor': anchor, 'cfi': cfi, 'method': 'verified-source-dom',
+                'calibration': 'book highlights' if self.calibrated else 'device root rule'}
 
     def compare(self, target, current):
         target_chapter, current_chapter = self.chapter(target), self.chapter(current)
@@ -212,7 +272,12 @@ class NativeSource:
             return target_chapter['index'] - current_chapter['index']
         ranks = []
         for position, chapter in ((target, target_chapter), (current, current_chapter)):
-            slot = self.source(chapter).by_route.get(tuple(position.get('xpath') or []))
+            route = tuple(position.get('xpath') or [])
+            if route and not self.calibrated:
+                if route[0] != self.root_index(chapter):
+                    raise ValueError('Native document root differs inside a chapter')
+                route = native_route(route, 1)
+            slot = self.source(chapter).by_route.get(route)
             if not slot or slot['source_offset'] != position.get('nodePosition'):
                 raise ValueError('Native element positions cannot be compared inside a chapter')
             offset = position.get('textOffset')
