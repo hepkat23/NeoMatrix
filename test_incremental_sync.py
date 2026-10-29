@@ -435,6 +435,30 @@ class IncrementalSyncTests(unittest.TestCase):
         self.ui.sync_direct()
         self.assertEqual(self.db.events, [])
 
+    def test_unconsumed_push_holds_back_only_that_book_and_names_it(self):
+        self.db.data['neomatrix_position_push_v1'] = {1: {
+            'status': 'written', 'identity': {}, 'written_last_access_ms': 5000000}}
+        self.ui.matches['1' * 32]['boox']['progress'] = '11/100'
+        self.ui.matches['2' * 32]['boox']['progress'] = '11/100'
+        module = sys.modules['calibre_plugins.frankenboox.sync_flow']
+        compared = []
+        real_prepare = module.prepare_sync
+        def recording_prepare(ui, entries, status):
+            compared.extend(entry[0] for entry in entries)
+            return real_prepare(ui, entries, status)
+        with patch.object(module, 'prepare_sync', recording_prepare):
+            self.ui.sync_direct()
+        self.assertEqual({event[1] for event in self.db.events}, {2})
+        self.assertNotIn(1, compared)
+        self.assertTrue(any(issue.startswith('Book 1: Reopen and close the pushed book')
+                            for issue in self.ui.last_sync_issues))
+        self.assertIn('1 book needs attention', self.ui.summary_text)
+        # Once NeoReader has opened the book after the push, it syncs normally.
+        self.db.events.clear()
+        self.ui.matches['1' * 32]['boox']['lastAccess'] = '6000000'
+        self.ui.sync_direct()
+        self.assertEqual({event[1] for event in self.db.events}, {1})
+
     def test_new_book_is_imported_without_rewriting_existing_books(self):
         self.ui.matches['3' * 32] = copy.deepcopy(self.ui.matches['1' * 32])
         self.ui.matches['3' * 32]['book_id'] = 3

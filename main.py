@@ -641,13 +641,18 @@ class FrankenDialog(QDialog):
             return
 
         try:
-            pending, unchanged = self._pending_archive_entries()
+            pending, unchanged, blocked = self._pending_archive_entries()
         except ValueError as error:
             QMessageBox.warning(self, 'NeoMatrix — Sync needs attention', str(error))
             self.summary.setText('<b>Sync stopped.</b> ' + str(error) + ' Nothing was written to Calibre.')
             return
         from calibre_plugins.frankenboox.sync_flow import prepare_sync, execute_pushes, default_backup_directory, carry_verified_mappings
-        entries = combine_book_entries([self._archive_payload(m) for m in self.matches.values() if m.get('book_id') is not None])
+        # Books still waiting for NeoReader to consume a pushed position sit out
+        # this sync entirely: no import, no restore and no second push.
+        blocked_ids = {book_id for book_id, _ in blocked}
+        blocked_issues = [issue for _, issue in blocked]
+        entries = [entry for entry in combine_book_entries([self._archive_payload(m) for m in self.matches.values() if m.get('book_id') is not None])
+                   if entry[0] not in blocked_ids]
         try:
             review = run_background(self, 'Comparing reading positions in Calibre and BOOX…',
                                     lambda status: prepare_sync(self, entries, status))
@@ -670,7 +675,7 @@ class FrankenDialog(QDialog):
             resume_issues = self._resume_sync_issues(entries)
             self.summary.setText(
                 f'<b>Sync finished.</b> <b>{unchanged}</b> book archives already up to date; nothing rewritten.' +
-                self._sync_issue_summary(entries, resume_issues + review['issues']) +
+                self._sync_issue_summary(entries, blocked_issues + resume_issues + review['issues'], blocked) +
                 ('<br>Farther Calibre positions were kept; nothing sent to BOOX.' if review['plans'] else ''))
             return
         done = self.archive(
@@ -693,7 +698,7 @@ class FrankenDialog(QDialog):
             self.summary.setText(
                 f'<b>Sync finished.</b> Saved BOOX data for <b>{done} book(s)</b>; <b>{unchanged}</b> already up to date; '
                 f'<b>{pushed}</b> position(s) sent to BOOX.' +
-                self._sync_issue_summary(entries, resume_issues + review['issues'] + failures) +
+                self._sync_issue_summary(entries, blocked_issues + resume_issues + review['issues'] + failures, blocked) +
                 ('<br>Reopen and close the pushed books on BOOX before the next Sync. Backups: ' + _html(str(default_backup_directory())) if pushed else '') +
                 ''
             )
@@ -1511,11 +1516,11 @@ class FrankenDialog(QDialog):
             messages.append(str(len(check.uncertain)) + ' book files could not be checked; entries kept. See Sync details.')
         return '<br>' + ' '.join(messages) if messages else ''
 
-    def _sync_issue_summary(self, entries, issues):
+    def _sync_issue_summary(self, entries, issues, blocked=()):
         self.last_sync_issues = list(dict.fromkeys(str(issue) for issue in issues))
         if not self.last_sync_issues:
             return self._book_file_summary()
-        affected = set()
+        affected = {book_id for book_id, _ in blocked}
         for book_id, state, _ in entries:
             title = str(self.db.field_for('title', book_id) or (state.get('boox_book') or {}).get('title') or 'Book ' + str(book_id))
             if any(issue.startswith(title + ':') for issue in self.last_sync_issues):
@@ -1543,22 +1548,35 @@ class FrankenDialog(QDialog):
         return issues
 
     def _pending_archive_entries(self):
+        """Return (pending, unchanged count, blocked) for this collection.
+
+        A book whose pushed position NeoReader has not consumed yet is held
+        back with a titled issue instead of stopping the whole sync.
+        """
         from calibre_plugins.frankenboox.integration import DATA_KEY
         from calibre_plugins.frankenboox.reader_bridge import ANCHOR_KEY, REPORT_KEY
         entries = combine_book_entries([self._archive_payload(m) for m in self.matches.values() if m.get('book_id') is not None])
         from calibre_plugins.frankenboox.library_push import ensure_pull_ready
-        for book_id, state, files in entries:
-            ensure_pull_ready(self.db, book_id, state)
+        ready, blocked = [], []
+        for entry in entries:
+            book_id, state, _ = entry
+            try:
+                ensure_pull_ready(self.db, book_id, state)
+            except ValueError as error:
+                title = self.db.field_for('title', book_id) or (state.get('boox_book') or {}).get('title') or 'Book ' + str(book_id)
+                blocked.append((book_id, str(title) + ': ' + str(error)))
+            else:
+                ready.append(entry)
         try:
             saved = self.db.get_custom_book_data(DATA_KEY)
             reports = self.db.get_custom_book_data(REPORT_KEY)
             anchors = self.db.get_custom_book_data(ANCHOR_KEY)
             statuses = self.db.get_custom_book_data(SYNC_KEY)
         except Exception:
-            return entries, 0
-        pending = [entry for entry in entries if not self._archive_is_current(
+            return ready, 0, blocked
+        pending = [entry for entry in ready if not self._archive_is_current(
             *entry, saved.get(entry[0]), reports.get(entry[0]), anchors.get(entry[0]), statuses.get(entry[0]))]
-        return pending, len(entries) - len(pending)
+        return pending, len(ready) - len(pending), blocked
 
     def _archive_files_to_write(self, book_id, files):
         """Preserve the bytes and modification times of unchanged companion files."""
