@@ -1,0 +1,37 @@
+# Publish a GitHub Release when a version tag (v1.2.3) is pushed.
+# The installable zip is already built and committed in dist/; this attaches
+# it with a SHA-256 checksum and the notes from release-notes/<tag>.md.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the plugin zip and notes exist for this tag
+        run: |
+          zip="dist/NeoMatrix_${GITHUB_REF_NAME}.zip"
+          notes="release-notes/${GITHUB_REF_NAME}.md"
+          test -f "$zip" || { echo "Missing $zip"; exit 1; }
+          test -f "$notes" || { echo "Missing $notes"; exit 1; }
+          version="${GITHUB_REF_NAME#v}"
+          grep -q "version = (${version//./, })" __init__.py || { echo "__init__.py version is not $version"; exit 1; }
+          cp "$zip" .
+          sha256sum "NeoMatrix_${GITHUB_REF_NAME}.zip" > SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: NeoMatrix ${{ github.ref_name }}
+          body_path: release-notes/${{ github.ref_name }}.md
+          files: |
+            NeoMatrix_${{ github.ref_name }}.zip
+            SHA256SUMS.txt
+          make_latest: true
