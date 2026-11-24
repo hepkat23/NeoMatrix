@@ -37,7 +37,9 @@ you why. It does not guess progress from a percentage.
 ## Public preview: compatibility limits
 
 Hardware tests used a BOOX Go Color 7 Gen II running Android 13 and Calibre on
-macOS. Other firmware and documents can use different position conventions;
+macOS. Checked again after BOOX firmware 4.3.1 (November 2026, NeoReader 39334):
+NeoReader's database layout, positions, annotations and handwriting files were
+unchanged and writes still work. Other firmware and documents can use different position conventions;
 unverified cases are reported rather than treated as supported.
 
 Comic ordering currently requires the inspected NeoReader provider build and
