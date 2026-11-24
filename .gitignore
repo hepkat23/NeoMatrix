@@ -3,7 +3,6 @@ __pycache__/
 .DS_Store
 
 # Separate project with its own git repo
-ReadingCompanion/
 Trinity/
 
 # Device snapshots: personal data (books, highlights), never commit
